@@ -23,6 +23,8 @@ jobs:
           # `changeset publish` checks existing tags to find unreleased versions.
           fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
       - run: bun install --frozen-lockfile
       # With changesets on main: opens or updates the "Version Packages" PR.
       # After that PR merges: tags the new version and creates its GitHub release.
@@ -64,6 +66,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev patchelf
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ startsWith(matrix.platform, 'macos') && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}

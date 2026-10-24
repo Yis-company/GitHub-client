@@ -19,6 +19,8 @@ jobs:
         with:
           fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
       - run: bun install --frozen-lockfile
       - name: Require a changeset for changed packages
         run: bunx changeset status --since=origin/${{ github.base_ref }}
@@ -28,6 +30,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
       - run: bun install --frozen-lockfile
       - run: bun run lint
       - run: bun run typecheck
