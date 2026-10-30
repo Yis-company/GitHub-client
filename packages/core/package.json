@@ -19,7 +19,7 @@
   "devDependencies": {
     "@tanstack/node-db-sqlite-persistence": "^0.2.23",
     "@types/better-sqlite3": "^9.6.0",
-    "@types/node": "^24",
+    "@types/node": "^26",
     "better-sqlite3": "^12.6.2",
     "typescript": "~6",
     "vitest": "^5.0.5"
