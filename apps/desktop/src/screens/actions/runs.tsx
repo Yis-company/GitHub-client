@@ -115,8 +115,11 @@ export function RunsContent({
     {
       j: () => setSelected((i) => Math.min(i + 1, visible.length - 1)),
       k: () => setSelected((i) => Math.max(i - 1, 0)),
+      // biome-ignore lint/correctness/noComponentHookFactories: key names follow KeyboardEvent.key
       ArrowDown: () => setSelected((i) => Math.min(i + 1, visible.length - 1)),
+      // biome-ignore lint/correctness/noComponentHookFactories: key names follow KeyboardEvent.key
       ArrowUp: () => setSelected((i) => Math.max(i - 1, 0)),
+      // biome-ignore lint/correctness/noComponentHookFactories: key names follow KeyboardEvent.key
       Enter: () => open(visible[selected]),
       o: () => visible[selected] && void openExternal(visible[selected].url),
       "/": () => searchRef.current?.focus(),

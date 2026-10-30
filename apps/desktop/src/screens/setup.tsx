@@ -46,7 +46,7 @@ export function Setup({
     }
   }
 
-  const useEnvToken = async () => {
+  const signInWithEnvToken = async () => {
     try {
       const envToken = await client.platform.envToken?.()
       if (envToken) await signIn(envToken)
@@ -125,7 +125,7 @@ export function Setup({
             </Button>
           )}
           {client.platform.envToken && (
-            <Button type="button" variant="outline" disabled={busy} onClick={useEnvToken}>
+            <Button type="button" variant="outline" disabled={busy} onClick={signInWithEnvToken}>
               Use GITHUB_TOKEN
             </Button>
           )}
