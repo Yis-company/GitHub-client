@@ -18,7 +18,7 @@ jobs:
       published: ${{ steps.changesets.outputs.published }}
       tag: ${{ steps.tag.outputs.tag }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           # `changeset publish` checks existing tags to find unreleased versions.
           fetch-depth: 0
@@ -59,7 +59,7 @@ jobs:
             args: --target universal-apple-darwin
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Install Tauri system libraries
         if: startsWith(matrix.platform, 'ubuntu')
         run: |
