@@ -15,10 +15,12 @@ jobs:
     if: github.event_name == 'pull_request' && !startsWith(github.head_ref, 'changeset-release/')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
       - run: bun install --frozen-lockfile
       - name: Require a changeset for changed packages
         run: bunx changeset status --since=origin/${{ github.base_ref }}
@@ -26,8 +28,10 @@ jobs:
   web:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
       - run: bun install --frozen-lockfile
       - run: bun run lint
       - run: bun run typecheck
@@ -38,7 +42,7 @@ jobs:
   rust:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Install Tauri system libraries
         run: |
           sudo apt-get update
@@ -54,3 +58,6 @@ jobs:
         run: |
           mkdir -p ../dist
           cargo clippy --all-targets -- -D warnings
+      - name: Native regression tests
+        working-directory: apps/desktop/src-tauri
+        run: cargo test --lib

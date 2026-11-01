@@ -2,6 +2,62 @@ import type { SyncedCollection } from "../collections/synced"
 import type { Job, Workflow, WorkflowRun } from "../domain/types"
 import type { RestClient } from "../github/rest"
 
+interface RestApprovalRun {
+  id: number
+  name: string
+  event: string
+  conclusion: string | null
+  head_sha: string
+  pull_requests?: Array<{ number: number; head?: { sha?: string | null } | null }> | null
+}
+
+export interface PendingWorkflowApproval {
+  id: number
+  name: string
+}
+
+/** Finds approval-required workflow runs that GitHub associates with this PR head. */
+export async function fetchPendingPullRequestApprovals(
+  rest: RestClient,
+  repo: string,
+  number: number,
+  headSha: string,
+): Promise<PendingWorkflowApproval[]> {
+  const path = `/repos/${repo}/actions/runs`
+  const byId = new Map<number, PendingWorkflowApproval>()
+  for (const event of ["pull_request", "pull_request_target"]) {
+    const result = await rest.pollAll<RestApprovalRun>(
+      path,
+      {
+        status: "action_required",
+        event,
+        ...(event === "pull_request" ? { head_sha: headSha } : {}),
+      },
+      {
+        conditional: false,
+        pick: (page) => (page as { workflow_runs: RestApprovalRun[] }).workflow_runs,
+      },
+    )
+    if (result.status !== "ok") continue
+    for (const run of result.data) {
+      if (run.conclusion !== "action_required" || run.event !== event) {
+        continue
+      }
+      const associations = run.pull_requests
+      const associatedWithHead =
+        Array.isArray(associations) &&
+        associations.some((pull) => pull.number === number && pull.head?.sha === headSha)
+      const eligible =
+        event === "pull_request_target"
+          ? associatedWithHead
+          : run.head_sha === headSha &&
+            (!(Array.isArray(associations) && associations.length > 0) || associatedWithHead)
+      if (eligible) byId.set(run.id, { id: run.id, name: run.name })
+    }
+  }
+  return [...byId.values()]
+}
+
 interface RestRun {
   id: number
   workflow_id: number
@@ -14,7 +70,7 @@ interface RestRun {
   conclusion: string | null
   head_branch: string | null
   head_sha: string
-  actor: { login: string } | null
+  actor: { login: string; node_id?: string; avatar_url?: string } | null
   created_at: string
   updated_at: string
   html_url: string
@@ -53,6 +109,8 @@ export const toWorkflowRun = (repo: string, r: RestRun): WorkflowRun => ({
   headBranch: r.head_branch,
   headSha: r.head_sha,
   actor: r.actor?.login ?? null,
+  ...(r.actor?.node_id ? { actorId: r.actor.node_id } : {}),
+  ...(r.actor?.avatar_url ? { actorAvatarUrl: r.actor.avatar_url } : {}),
   createdAt: r.created_at,
   updatedAt: r.updated_at,
   url: r.html_url,

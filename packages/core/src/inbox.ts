@@ -17,13 +17,48 @@ export interface InboxPreference {
     reviewRequests: string[]
     failed: boolean
   }
+  /** Terminal GitHub lifecycle observed while this row was settled. */
+  terminalState?: "CLOSED" | "MERGED"
+  terminalObservedAt?: string
   changedAt: string
+  /** Saved position in Active, retained while pinned or snoozed. */
+  activeOrder?: number
+  /** Saved position in Pinned, retained while snoozed. */
+  pinOrder?: number
 }
 
 export interface InboxPull {
   pull: PullRequest
   state: InboxState
   preference?: InboxPreference
+}
+
+export type InboxOrderSection = "active" | "pinned" | "settled"
+
+export interface InboxDropPosition {
+  beforePullId?: string
+  afterPullId?: string
+}
+
+export interface InboxMoveTarget extends InboxDropPosition {
+  section: InboxOrderSection
+}
+
+export interface InboxUndoRow {
+  pullId: string
+  previous?: InboxPreference
+  expected?: InboxPreference
+}
+
+export interface InboxUndoToken {
+  id: number
+  accountLogin: string
+  expiresAt: number
+}
+
+export interface InboxMutationResult {
+  preference: InboxPreference
+  undo: InboxUndoToken | null
 }
 
 export type InboxPreferenceStore = SyncedCollection<InboxPreference, string>
@@ -40,6 +75,7 @@ export function deriveInboxPulls(
   preferences: readonly InboxPreference[],
   now: number,
   scope: "involving" | "all",
+  entityScope?: { groupId?: string; repo?: string },
 ): InboxPull[] {
   const currentLogin = login.trim().toLowerCase()
   const teamRequests = new Set(
@@ -50,11 +86,19 @@ export function deriveInboxPulls(
       ),
   )
   const involvingMe = new Set(pulls.filter((pull) => pull.groupId === "me").map((pull) => pull.id))
-  const byPull = new Map<string, PullRequest>()
-  for (const pull of pulls) {
-    const prior = byPull.get(pull.id)
-    if (!prior || preferPull(pull, prior)) byPull.set(pull.id, pull)
-  }
+  // Membership is established before collapsing copies; involvement still uses the full set.
+  const memberIds = entityScope
+    ? new Set(
+        pulls
+          .filter((pull) =>
+            entityScope.groupId
+              ? pull.groupId === entityScope.groupId
+              : pull.repo.toLowerCase() === entityScope.repo?.toLowerCase(),
+          )
+          .map((pull) => pull.id),
+      )
+    : null
+  const byPull = dedupePulls(pulls)
   const accountPreferences = new Map(
     preferences
       .filter((preference) => preference.accountLogin.toLowerCase() === currentLogin)
@@ -63,6 +107,7 @@ export function deriveInboxPulls(
 
   return [...byPull.values()]
     .filter((pull) => {
+      if (memberIds && !memberIds.has(pull.id)) return false
       if (scope === "all") return true
       return (
         involvingMe.has(pull.id) ||
@@ -75,15 +120,43 @@ export function deriveInboxPulls(
     })
     .map((pull) => {
       const preference = accountPreferences.get(pull.id)
+      const terminal = isEffectivelyTerminal(pull, preference)
       return {
-        pull,
-        state: effectiveState(preference, now),
+        pull:
+          terminal && !isTerminalState(pull.state)
+            ? {
+                ...pull,
+                state: preference?.terminalState ?? "CLOSED",
+                stateObservedAt: preference?.terminalObservedAt,
+              }
+            : pull,
+        state: terminal ? "settled" : effectiveState(preference, now),
         ...(preference ? { preference } : {}),
       }
     })
 }
 
+function isTerminalState(state: PullRequest["state"]): state is "CLOSED" | "MERGED" {
+  return state === "CLOSED" || state === "MERGED"
+}
+
 function preferPull(candidate: PullRequest, current: PullRequest): boolean {
+  const candidateState = candidate.state ?? "OPEN"
+  const currentState = current.state ?? "OPEN"
+  if (candidateState !== currentState) {
+    if (candidateState === "MERGED" || currentState === "MERGED") {
+      return candidateState === "MERGED"
+    }
+    const candidateStateTime = candidate.stateObservedAt
+      ? Date.parse(candidate.stateObservedAt)
+      : Number.NEGATIVE_INFINITY
+    const currentStateTime = current.stateObservedAt
+      ? Date.parse(current.stateObservedAt)
+      : Number.NEGATIVE_INFINITY
+    if (candidateStateTime !== currentStateTime) return candidateStateTime > currentStateTime
+    if (candidateStateTime !== Number.NEGATIVE_INFINITY) return candidateState === "CLOSED"
+    return candidateState === "CLOSED"
+  }
   const candidateSync = candidate.syncedAt
     ? Date.parse(candidate.syncedAt)
     : Number.NEGATIVE_INFINITY
@@ -94,6 +167,55 @@ function preferPull(candidate: PullRequest, current: PullRequest): boolean {
   // Prefer copies with useful current data when the sync times are equal.
   if (!current.headOid && candidate.headOid) return true
   return false
+}
+
+function dedupePulls(pulls: readonly PullRequest[]): Map<string, PullRequest> {
+  const copiesById = new Map<string, PullRequest[]>()
+  for (const pull of pulls) {
+    const copies = copiesById.get(pull.id) ?? []
+    copies.push(pull)
+    copiesById.set(pull.id, copies)
+  }
+  const byPull = new Map<string, PullRequest>()
+  for (const [id, copies] of copiesById) {
+    const lifecycle = copies.reduce((current, candidate) => {
+      const candidateState = candidate.state ?? "OPEN"
+      const currentState = current.state ?? "OPEN"
+      if (candidateState === "MERGED" || currentState === "MERGED") {
+        return candidateState === "MERGED" ? candidate : current
+      }
+      const candidateAt = candidate.stateObservedAt
+        ? Date.parse(candidate.stateObservedAt)
+        : Number.NEGATIVE_INFINITY
+      const currentAt = current.stateObservedAt
+        ? Date.parse(current.stateObservedAt)
+        : Number.NEGATIVE_INFINITY
+      if (candidateAt !== currentAt) return candidateAt > currentAt ? candidate : current
+      return candidateState === "CLOSED" ? candidate : current
+    })
+    const sameState = copies.filter(
+      (copy) => (copy.state ?? "OPEN") === (lifecycle.state ?? "OPEN"),
+    )
+    const snapshot = sameState.reduce((current, candidate) =>
+      preferPull(candidate, current) ? candidate : current,
+    )
+    byPull.set(id, { ...snapshot, stateObservedAt: lifecycle.stateObservedAt })
+  }
+  return byPull
+}
+
+function isEffectivelyTerminal(
+  pull: PullRequest,
+  preference: InboxPreference | undefined,
+): boolean {
+  if (pull.state === "MERGED" || preference?.terminalState === "MERGED") return true
+  if (pull.state === "CLOSED") return true
+  if (preference?.terminalState !== "CLOSED") return false
+  const openAt = pull.stateObservedAt ? Date.parse(pull.stateObservedAt) : Number.NaN
+  const closedAt = preference.terminalObservedAt
+    ? Date.parse(preference.terminalObservedAt)
+    : Date.parse(preference.changedAt)
+  return !(Number.isFinite(openAt) && openAt > closedAt)
 }
 
 function effectiveState(preference: InboxPreference | undefined, now: number): InboxState {
@@ -117,7 +239,7 @@ function snapshot(pull: PullRequest): InboxPreference["snapshot"] {
     reviewRequests: [
       ...new Set(pull.reviewRequests.map((request) => request.toLowerCase())),
     ].sort(),
-    failed: isFailure(pull),
+    failed: pull.checkSnapshotComplete === false ? false : isFailure(pull),
   }
 }
 
@@ -129,7 +251,7 @@ function createPreference(
   now = Date.now(),
 ): InboxPreference {
   const account = accountLogin.trim().toLowerCase()
-  return {
+  const preference: InboxPreference = {
     key: inboxPreferenceKey(account, pull.id),
     accountLogin: account,
     pullId: pull.id,
@@ -137,6 +259,22 @@ function createPreference(
     snoozedUntil,
     snapshot: snapshot(pull),
     changedAt: new Date(now).toISOString(),
+    activeOrder: undefined,
+    pinOrder: undefined,
+  }
+  if (state === "settled" && (pull.state === "CLOSED" || pull.state === "MERGED")) {
+    preference.terminalState = pull.state
+    preference.terminalObservedAt = pull.stateObservedAt ?? new Date(now).toISOString()
+  }
+  return preference
+}
+
+function assertInboxPullCanMove(
+  pull: PullRequest,
+  target: "active" | "pinned" | "settled" | "snoozed",
+): void {
+  if ((pull.state === "CLOSED" || pull.state === "MERGED") && target !== "settled") {
+    throw new Error("Closed or merged pull requests stay in Settled")
   }
 }
 
@@ -155,15 +293,19 @@ export async function setInboxSnoozed(
   until: string,
   now = Date.now(),
 ): Promise<InboxPreference> {
-  const preference = createPreference(
-    accountLogin,
-    pull,
-    "snoozed",
-    validateSnoozeExpiry(until, now),
-    now,
-  )
-  await preferences.upsert([preference])
-  return preference
+  assertInboxPullCanMove(pull, "snoozed")
+  const account = accountLogin.trim().toLowerCase()
+  const snoozedUntil = validateSnoozeExpiry(until, now)
+  const stored = preferences.collection.get(inboxPreferenceKey(account, pull.id))
+  const previous = stored ? plainInboxPreference(stored) : undefined
+  const preference = createPreference(account, pull, "snoozed", snoozedUntil, now)
+  const next = {
+    ...preference,
+    ...(isRank(previous?.activeOrder) ? { activeOrder: previous.activeOrder } : {}),
+    ...(isRank(previous?.pinOrder) ? { pinOrder: previous.pinOrder } : {}),
+  }
+  await preferences.upsert([next])
+  return next
 }
 
 export async function settleInboxPull(
@@ -172,9 +314,23 @@ export async function settleInboxPull(
   pull: PullRequest,
   now = Date.now(),
 ): Promise<InboxPreference> {
-  const preference = createPreference(accountLogin, pull, "settled", null, now)
-  await preferences.upsert([preference])
-  return preference
+  const account = accountLogin.trim().toLowerCase()
+  const current = accountPreferences(preferences, account)
+  const preference = createPreference(account, pull, "settled", null, now)
+  const updates = new Map(current.map((row) => [row.pullId, row]))
+  updates.set(pull.id, preference)
+  renumber(
+    updates,
+    rankedPullIds(current, "activeOrder").filter((id) => id !== pull.id),
+    "activeOrder",
+  )
+  renumber(
+    updates,
+    rankedPullIds(current, "pinOrder").filter((id) => id !== pull.id),
+    "pinOrder",
+  )
+  await preferences.upsert([...updates.values()].filter((row) => changedFrom(current, row)))
+  return updates.get(pull.id)!
 }
 
 export async function restoreInboxPull(
@@ -183,9 +339,23 @@ export async function restoreInboxPull(
   pull: PullRequest,
   now = Date.now(),
 ): Promise<InboxPreference> {
-  const preference = createPreference(accountLogin, pull, "active", null, now)
-  await preferences.upsert([preference])
-  return preference
+  if (pull.state === "CLOSED" || pull.state === "MERGED") {
+    return settleInboxPull(preferences, accountLogin, pull, now)
+  }
+  const account = accountLogin.trim().toLowerCase()
+  const current = accountPreferences(preferences, account)
+  const preference = createPreference(account, pull, "active", null, now)
+  const updates = new Map(current.map((row) => [row.pullId, row]))
+  updates.set(pull.id, preference)
+  const activeOrder = [
+    pull.id,
+    ...rankedPullIds(current, "activeOrder").filter((id) => id !== pull.id),
+  ]
+  renumber(updates, activeOrder, "activeOrder")
+  const pinOrder = rankedPullIds(current, "pinOrder").filter((id) => id !== pull.id)
+  renumber(updates, pinOrder, "pinOrder")
+  await preferences.upsert([...updates.values()].filter((row) => changedFrom(current, row)))
+  return updates.get(pull.id)!
 }
 
 /** Restores a captured preference or deletes it to return to the default Active state. */
@@ -208,7 +378,262 @@ export async function restoreInboxPreference(
   ) {
     throw new Error("Inbox preference does not match the account and pull request")
   }
-  await preferences.upsert([{ ...previous, key, accountLogin: account, pullId }])
+  await preferences.upsert([
+    {
+      ...previous,
+      key,
+      accountLogin: account,
+      pullId,
+      activeOrder: previous.activeOrder,
+      pinOrder: previous.pinOrder,
+    },
+  ])
+}
+
+/** Lazily seeds missing ranks and puts newly discovered active PRs first. */
+export async function ensureInboxOrder(
+  preferences: InboxPreferenceStore,
+  accountLogin: string,
+  orderedEntries: readonly InboxPull[],
+  now = Date.now(),
+): Promise<void> {
+  const account = accountLogin.trim().toLowerCase()
+  const current = accountPreferences(preferences, account)
+  const rowsById = new Map(current.map((row) => [row.pullId, row]))
+  const orderedCurrent = orderedEntries.filter((entry) => {
+    const stored = rowsById.get(entry.pull.id)
+    const state = stored ? effectiveState(stored, now) : entry.state
+    return state === "active" || state === "snoozed"
+  })
+  const existingOrder = rankedPullIds(current, "activeOrder")
+  const missing = orderedCurrent.filter(
+    (entry) => !isRank(rowsById.get(entry.pull.id)?.activeOrder),
+  )
+  if (missing.length === 0) return
+
+  const updates = new Map(current.map((row) => [row.pullId, row]))
+  for (const entry of missing) {
+    const previous = updates.get(entry.pull.id)
+    const base = previous ?? createPreference(account, entry.pull, entry.state, null, now)
+    updates.set(entry.pull.id, { ...base, activeOrder: 0 })
+  }
+  const order =
+    existingOrder.length === 0
+      ? orderedCurrent.map((entry) => entry.pull.id)
+      : [...missing.map((entry) => entry.pull.id), ...existingOrder]
+  renumber(updates, order, "activeOrder")
+  const changed = [...updates.values()].filter((row) => changedFrom(current, row))
+  if (changed.length > 0) await preferences.upsert(changed)
+}
+
+/** Moves one PR by stable ID anchors against the full saved sequence. */
+export async function moveInboxPull(
+  preferences: InboxPreferenceStore,
+  accountLogin: string,
+  pull: PullRequest,
+  section: InboxOrderSection,
+  position: InboxDropPosition = {},
+  now = Date.now(),
+): Promise<InboxPreference> {
+  assertInboxPullCanMove(pull, section)
+  const account = accountLogin.trim().toLowerCase()
+  const current = accountPreferences(preferences, account)
+  const prior = current.find((row) => row.pullId === pull.id)
+  if (section === "settled" && prior?.state === "settled") return prior
+
+  const updates = new Map(current.map((row) => [row.pullId, row]))
+  let next = prior ?? createPreference(account, pull, "active", null, now)
+  const lifecycleChanged =
+    section === "settled"
+      ? next.state !== "settled"
+      : next.state !== "active" || next.snoozedUntil !== null
+  if (section === "settled") {
+    next = createPreference(account, pull, "settled", null, now)
+  } else if (lifecycleChanged) {
+    next = createPreference(account, pull, "active", null, now)
+  }
+
+  const activeOrder = rankedPullIds(current, "activeOrder")
+  const pinOrder = rankedPullIds(current, "pinOrder")
+  let updatedActive = activeOrder.filter((id) => id !== pull.id)
+  const updatedPins = pinOrder.filter((id) => id !== pull.id)
+
+  if (section === "settled") {
+    // Settling deliberately releases both saved positions.
+    updates.set(pull.id, next)
+  } else if (section === "active") {
+    const insertAt = insertionIndex(updatedActive, position)
+    if (insertAt === null) return prior ?? next
+    updatedActive.splice(insertAt, 0, pull.id)
+    updates.set(pull.id, withoutRank(next, "pinOrder"))
+  } else {
+    // A pinned PR keeps its Active fallback; a restored row gets a top fallback.
+    if (isRank(prior?.activeOrder)) {
+      next = { ...next, activeOrder: prior.activeOrder }
+      updatedActive = [...activeOrder]
+    } else {
+      updatedActive.unshift(pull.id)
+    }
+    const insertAt = insertionIndex(updatedPins, position)
+    if (insertAt === null) return prior ?? next
+    updatedPins.splice(insertAt, 0, pull.id)
+    updates.set(pull.id, next)
+  }
+
+  renumber(updates, updatedActive, "activeOrder")
+  renumber(updates, updatedPins, "pinOrder")
+  const changed = [...updates.values()].filter((row) => changedFrom(current, row))
+  if (changed.length > 0) await preferences.upsert(changed)
+  return updates.get(pull.id)!
+}
+
+/** Pins only active PRs and preserves their saved Active slot. */
+export async function pinInboxPull(
+  preferences: InboxPreferenceStore,
+  accountLogin: string,
+  pull: PullRequest,
+  now = Date.now(),
+): Promise<InboxPreference> {
+  assertInboxPullCanMove(pull, "pinned")
+  const account = accountLogin.trim().toLowerCase()
+  const current = accountPreferences(preferences, account)
+  const prior = current.find((row) => row.pullId === pull.id)
+  if (prior?.state === "snoozed" || prior?.state === "settled" || isRank(prior?.pinOrder)) {
+    return prior ?? createPreference(account, pull, "active", null, now)
+  }
+  const updates = new Map(current.map((row) => [row.pullId, row]))
+  const next = prior ?? createPreference(account, pull, "active", null, now)
+  updates.set(pull.id, { ...next, pinOrder: 0 })
+  renumber(updates, [pull.id, ...rankedPullIds(current, "pinOrder")], "pinOrder")
+  const changed = [...updates.values()].filter((row) => changedFrom(current, row))
+  if (changed.length > 0) await preferences.upsert(changed)
+  return updates.get(pull.id)!
+}
+
+/** Unpins while retaining the Active fallback position. */
+export async function unpinInboxPull(
+  preferences: InboxPreferenceStore,
+  accountLogin: string,
+  pull: PullRequest,
+  now = Date.now(),
+): Promise<InboxPreference> {
+  if (pull.state === "CLOSED" || pull.state === "MERGED") {
+    return settleInboxPull(preferences, accountLogin, pull, now)
+  }
+  const account = accountLogin.trim().toLowerCase()
+  const current = accountPreferences(preferences, account)
+  const prior = current.find((row) => row.pullId === pull.id)
+  if (!prior || !isRank(prior.pinOrder))
+    return prior ?? createPreference(account, pull, "active", null, now)
+  const updates = new Map(current.map((row) => [row.pullId, row]))
+  updates.set(pull.id, withoutRank(prior, "pinOrder"))
+  renumber(
+    updates,
+    rankedPullIds(current, "pinOrder").filter((id) => id !== pull.id),
+    "pinOrder",
+  )
+  const changed = [...updates.values()].filter((row) => changedFrom(current, row))
+  if (changed.length > 0) await preferences.upsert(changed)
+  return updates.get(pull.id)!
+}
+
+/** Wakes a snoozed PR at its retained pin and Active positions. */
+export async function wakeInboxPull(
+  preferences: InboxPreferenceStore,
+  accountLogin: string,
+  pull: PullRequest,
+  now = Date.now(),
+): Promise<InboxPreference> {
+  if (pull.state === "CLOSED" || pull.state === "MERGED") {
+    return settleInboxPull(preferences, accountLogin, pull, now)
+  }
+  const account = accountLogin.trim().toLowerCase()
+  const current = accountPreferences(preferences, account)
+  const prior = current.find((row) => row.pullId === pull.id)
+  if (prior?.state !== "snoozed")
+    return prior ?? createPreference(account, pull, "active", null, now)
+  const next = {
+    ...createPreference(account, pull, "active", null, now),
+    ...(isRank(prior.activeOrder) ? { activeOrder: prior.activeOrder } : {}),
+    ...(isRank(prior.pinOrder) ? { pinOrder: prior.pinOrder } : {}),
+  }
+  await preferences.upsert([next])
+  return next
+}
+
+type RankField = "activeOrder" | "pinOrder"
+
+function isRank(value: number | undefined): value is number {
+  return Number.isInteger(value) && value! >= 0
+}
+
+function accountPreferences(preferences: InboxPreferenceStore, account: string) {
+  return [...preferences.collection.values()]
+    .filter((row) => row.accountLogin.trim().toLowerCase() === account)
+    .map(plainInboxPreference)
+}
+
+function plainInboxPreference(row: InboxPreference): InboxPreference {
+  return {
+    key: row.key,
+    accountLogin: row.accountLogin,
+    pullId: row.pullId,
+    state: row.state,
+    snoozedUntil: row.snoozedUntil,
+    snapshot: {
+      headOid: row.snapshot.headOid,
+      reviewRequests: [...row.snapshot.reviewRequests],
+      failed: row.snapshot.failed,
+    },
+    terminalState: row.terminalState,
+    terminalObservedAt: row.terminalObservedAt,
+    changedAt: row.changedAt,
+    activeOrder: row.activeOrder,
+    pinOrder: row.pinOrder,
+  }
+}
+
+function rankedPullIds(rows: readonly InboxPreference[], field: RankField): string[] {
+  return rows
+    .filter((row) => isRank(row[field]))
+    .sort((a, b) => a[field]! - b[field]! || a.pullId.localeCompare(b.pullId))
+    .map((row) => row.pullId)
+}
+
+function renumber(
+  rows: Map<string, InboxPreference>,
+  pullIds: readonly string[],
+  field: RankField,
+): void {
+  pullIds.forEach((pullId, index) => {
+    const row = rows.get(pullId)
+    if (row && row[field] !== index) rows.set(pullId, { ...row, [field]: index })
+  })
+}
+
+function withoutRank(row: InboxPreference, field: RankField): InboxPreference {
+  return { ...row, [field]: undefined }
+}
+
+function insertionIndex(pullIds: readonly string[], position: InboxDropPosition): number | null {
+  if (position.beforePullId === position.afterPullId && position.beforePullId !== undefined) {
+    return null
+  }
+  if (position.beforePullId !== undefined) {
+    const before = pullIds.indexOf(position.beforePullId)
+    if (before < 0) return null
+    return before
+  }
+  if (position.afterPullId !== undefined) {
+    const after = pullIds.indexOf(position.afterPullId)
+    return after < 0 ? null : after + 1
+  }
+  return 0
+}
+
+function changedFrom(current: readonly InboxPreference[], candidate: InboxPreference): boolean {
+  const prior = current.find((row) => row.pullId === candidate.pullId)
+  return JSON.stringify(prior) !== JSON.stringify(candidate)
 }
 
 /**
@@ -223,12 +648,9 @@ export async function reconcileInboxState(
   groups: readonly Group[] = [],
 ): Promise<void> {
   const account = accountLogin.trim().toLowerCase()
-  const byPull = new Map<string, PullRequest>()
-  for (const pull of pulls) {
-    const prior = byPull.get(pull.id)
-    if (!prior || preferPull(pull, prior)) byPull.set(pull.id, pull)
-  }
+  const byPull = dedupePulls(pulls)
   const updates: InboxPreference[] = []
+  const reactivated: PullRequest[] = []
   const teamRequests = new Set(
     groups
       .filter((group) => group.kind === "team")
@@ -236,10 +658,36 @@ export async function reconcileInboxState(
         (group.id.startsWith("team:") ? group.id.slice(5) : group.name).toLowerCase(),
       ),
   )
-  for (const preference of preferences.collection.values()) {
+  for (const storedPreference of preferences.collection.values()) {
+    const preference = plainInboxPreference(storedPreference)
     if (preference.accountLogin.toLowerCase() !== account) continue
     const pull = byPull.get(preference.pullId)
     if (!pull) continue
+    if (pull.state === "CLOSED" || pull.state === "MERGED") {
+      const terminalState = preference.terminalState === "MERGED" ? "MERGED" : pull.state
+      if (
+        preference.state !== "settled" ||
+        preference.terminalState !== terminalState ||
+        preference.terminalObservedAt !== pull.stateObservedAt
+      ) {
+        updates.push({
+          ...createPreference(account, pull, "settled", null, now),
+          terminalState,
+          terminalObservedAt: pull.stateObservedAt ?? preference.terminalObservedAt,
+        })
+      }
+      continue
+    }
+    if (preference.terminalState === "MERGED") continue
+    if (preference.terminalState === "CLOSED") {
+      const reopenedAt = pull.stateObservedAt ? Date.parse(pull.stateObservedAt) : Number.NaN
+      const closedAt = preference.terminalObservedAt
+        ? Date.parse(preference.terminalObservedAt)
+        : Date.parse(preference.changedAt)
+      if (!(Number.isFinite(reopenedAt) && reopenedAt > closedAt)) continue
+      reactivated.push(pull)
+      continue
+    }
     if (
       preference.state === "settled" &&
       pull.syncedAt &&
@@ -252,11 +700,16 @@ export async function reconcileInboxState(
       preference.snoozedUntil !== null &&
       Date.parse(preference.snoozedUntil) <= now
     ) {
-      updates.push(createPreference(account, pull, "active", null, now))
+      updates.push({
+        ...createPreference(account, pull, "active", null, now),
+        ...(isRank(preference.activeOrder) ? { activeOrder: preference.activeOrder } : {}),
+        ...(isRank(preference.pinOrder) ? { pinOrder: preference.pinOrder } : {}),
+      })
       continue
     }
     if (preference.state !== "settled") continue
     const current = snapshot(pull)
+    if (pull.checkSnapshotComplete === false) current.failed = preference.snapshot.failed
     const changedHead = Boolean(
       preference.snapshot.headOid &&
         current.headOid &&
@@ -268,12 +721,42 @@ export async function reconcileInboxState(
     })
     const newFailure = current.failed && !preference.snapshot.failed
     if (changedHead || addedRequest || newFailure) {
-      updates.push(createPreference(account, pull, "active", null, now))
+      reactivated.push(pull)
     } else if (JSON.stringify(current) !== JSON.stringify(preference.snapshot)) {
       // Record removals, recovery, and newly available baseline data. This
       // prevents an old request or failure from looking new if it returns.
       updates.push({ ...preference, snapshot: current })
     }
   }
-  if (updates.length > 0) await preferences.upsert(updates)
+  if (reactivated.length > 0) {
+    const current = accountPreferences(preferences, account)
+    const byId = new Map(current.map((row) => [row.pullId, row]))
+    for (const row of updates) byId.set(row.pullId, row)
+    for (const pull of reactivated) {
+      byId.set(pull.id, createPreference(account, pull, "active", null, now))
+    }
+    const newlyActive = [...new Map(reactivated.map((pull) => [pull.id, pull])).values()]
+      .sort(
+        (a, b) =>
+          b.updatedAt.localeCompare(a.updatedAt) ||
+          a.repo.localeCompare(b.repo) ||
+          a.number - b.number,
+      )
+      .map((pull) => pull.id)
+    const priorActive = rankedPullIds(current, "activeOrder").filter(
+      (id) => !newlyActive.includes(id),
+    )
+    const allUpdates = new Map(byId)
+    renumber(allUpdates, [...newlyActive, ...priorActive], "activeOrder")
+    renumber(
+      allUpdates,
+      rankedPullIds(current, "pinOrder").filter((id) => !newlyActive.includes(id)),
+      "pinOrder",
+    )
+    updates.push(...[...allUpdates.values()].filter((row) => changedFrom(current, row)))
+  }
+  if (updates.length > 0) {
+    const byId = new Map(updates.map((row) => [row.pullId, row]))
+    await preferences.upsert([...byId.values()])
+  }
 }

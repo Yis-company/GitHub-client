@@ -7,12 +7,22 @@ export type Fetch = typeof globalThis.fetch
 export class GitHubError extends Error {
   readonly status: number
   readonly body: unknown
+  readonly rateLimited: boolean
+  readonly retryAfterMs: number
 
-  constructor(status: number, message: string, body?: unknown) {
+  constructor(
+    status: number,
+    message: string,
+    body?: unknown,
+    rateLimited = false,
+    retryAfterMs = 0,
+  ) {
     super(message)
     this.name = "GitHubError"
     this.status = status
     this.body = body
+    this.rateLimited = rateLimited
+    this.retryAfterMs = retryAfterMs
   }
 }
 
@@ -76,11 +86,16 @@ export class RestClient {
   async pollAll<T>(
     path: string,
     query?: Query,
-    options: { maxPages?: number; pick?: (page: unknown) => T[]; recencySorted?: boolean } = {},
+    options: {
+      maxPages?: number
+      pick?: (page: unknown) => T[]
+      recencySorted?: boolean
+      conditional?: boolean
+    } = {},
   ): Promise<GetResult<T[]>> {
     const pick = options.pick ?? ((page) => page as T[])
     const first = this.url(path, { per_page: 100, ...query })
-    const etag = this.etags.get(first)
+    const etag = options.conditional === false ? undefined : this.etags.get(first)
     let response = await this.send("GET", first, undefined, etag ? { "If-None-Match": etag } : {})
     const pollIntervalSec = numberHeader(response, "X-Poll-Interval")
     if (response.status === 304) return { status: "not-modified", pollIntervalSec }
@@ -94,13 +109,20 @@ export class RestClient {
       next = nextLink(response)
     }
     const singlePage = !nextLink(firstResponse)
-    if (firstEtag && (singlePage || options.recencySorted)) this.etags.set(first, firstEtag)
-    else this.etags.delete(first)
+    if (options.conditional !== false) {
+      if (firstEtag && (singlePage || options.recencySorted)) this.etags.set(first, firstEtag)
+      else this.etags.delete(first)
+    }
     return { status: "ok", data: items, pollIntervalSec }
   }
 
-  async get<T>(path: string, query?: Query, headers: Record<string, string> = {}): Promise<T> {
-    const response = await this.send("GET", this.url(path, query), undefined, headers)
+  async get<T>(
+    path: string,
+    query?: Query,
+    headers: Record<string, string> = {},
+    signal?: AbortSignal,
+  ): Promise<T> {
+    const response = await this.send("GET", this.url(path, query), undefined, headers, signal)
     return (await response.json()) as T
   }
 
@@ -123,6 +145,7 @@ export class RestClient {
     url: string,
     body?: unknown,
     headers: Record<string, string> = {},
+    signal?: AbortSignal,
   ): Promise<Response> {
     const token = this.options.getToken()
     const response = await this.options.fetch(url, {
@@ -135,6 +158,7 @@ export class RestClient {
         ...headers,
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal,
     })
     this.rateLimits.update(response.headers)
     if (response.status === 304 || response.ok) return response
@@ -152,7 +176,22 @@ async function toError(response: Response): Promise<GitHubError> {
   const message =
     (body as { message?: string } | undefined)?.message ??
     `GitHub request failed: ${response.status}`
-  return new GitHubError(response.status, message, body)
+  const retryAfterMs = retryAfter(response.headers.get("Retry-After"))
+  const rateLimited =
+    response.status === 429 ||
+    (response.status === 403 &&
+      (response.headers.get("X-RateLimit-Remaining") === "0" ||
+        response.headers.has("Retry-After") ||
+        /secondary rate limit|abuse detection/i.test(message)))
+  return new GitHubError(response.status, message, body, rateLimited, retryAfterMs)
+}
+
+function retryAfter(value: string | null): number {
+  if (!value) return 0
+  const seconds = Number(value)
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000)
+  const date = Date.parse(value)
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : 0
 }
 
 function numberHeader(response: Response, name: string): number | undefined {

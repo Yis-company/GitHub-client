@@ -1,45 +1,173 @@
-import { jobKeys, type PullRequest } from "@github-client/core"
-import { deriveInboxPulls } from "@github-client/core/inbox"
-import { Button } from "@github-client/ui/components/button"
-import { Input } from "@github-client/ui/components/input"
+import { DndContext, DragOverlay, pointerWithin } from "@dnd-kit/core"
 import {
-  Popover,
-  PopoverContent,
-  PopoverTitle,
-  PopoverTrigger,
-} from "@github-client/ui/components/popover"
+  type GitHubClient,
+  type InboxMutationResult,
+  type InboxPull,
+  jobKeys,
+  type PullRequest,
+} from "@github-client/core"
 import { cn } from "@github-client/ui/lib/utils"
 import { useLiveQuery } from "@tanstack/react-db"
-import { CheckIcon, ClockIcon, RefreshCwIcon, Undo2Icon } from "lucide-react"
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import { toast } from "sonner"
 import { useJobStatus, useSession, useWatch } from "@/app/client"
+import { useErrorToast } from "@/app/errors"
 import { useShortcuts } from "@/app/shortcuts"
-import { ReviewBadge, rollupState, StateIcon } from "@/components/status"
-import { RelativeTime } from "@/components/time"
+import { ContributionCalendar } from "@/components/contribution-calendar"
+import { RepositoryCacheStatus } from "@/components/repository-cache-status"
+import { useInboxDrag } from "./inbox-drag"
+import { useInboxGeometry } from "./inbox-geometry"
+import { InboxHeader } from "./inbox-header"
+import { useInboxLocation } from "./inbox-location"
+import { useInboxModel } from "./inbox-model"
+import { useInboxMutations } from "./inbox-mutations"
+import { cancelInboxDragOnUnmount, InboxActions } from "./inbox-parts"
+import { InboxRow } from "./inbox-row"
+import { type DropPosition, InboxSections } from "./inbox-sidebar"
 import { PullContent, type PullTab } from "./pull/pull-page"
+import { useRepositoryInboxData } from "./repository-inbox-data"
 
-type View = "active" | "snoozed" | "settled" | "failures"
+type InboxViewState = {
+  text: string
+  scope: "involving" | "all"
+  failures: boolean
+  settledLimit: number
+  scroll: number
+}
+// Client lifetime bounds this cache to one signed-in session, including browser Back navigation.
+const savedViews = new WeakMap<GitHubClient, Map<string, InboxViewState>>()
 
-export function Inbox() {
+export function Inbox({
+  entityScope,
+  active = true,
+}: {
+  entityScope?: { groupId?: string; repo?: string }
+  active?: boolean
+}) {
   const { client, viewer } = useSession()
-  const pulls = useLiveQuery((q) => q.from({ p: client.collections.pulls.collection })).data
+  const lifecycleRevision = useSyncExternalStore(
+    client.subscribeInboxLifecycle,
+    client.getInboxLifecycleRevision,
+  )
+  const syncedPulls = useLiveQuery((q) => q.from({ p: client.collections.pulls.collection })).data
   const groups = useLiveQuery((q) => q.from({ g: client.collections.groups.collection })).data
   const preferences = useLiveQuery((q) =>
     q.from({ p: client.collections.inboxPreferences.collection }),
   ).data
-  const [view, setView] = useState<View>("active")
-  const [scope, setScope] = useState<"involving" | "all">("involving")
-  const [text, setText] = useState("")
-  const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [tab, setTab] = useState<PullTab>("conversation")
+  const viewKey = `${viewer.login.toLowerCase()}:${entityScope?.groupId ?? entityScope?.repo ?? "global"}`
+  const [initialView] = useState(() => savedViews.get(client)?.get(viewKey))
+  const savedView = useRef(initialView)
+  const location = useInboxLocation()
+  const repositoryData = useRepositoryInboxData(entityScope?.repo, active)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: remote confirmation can change without a successful collection write.
+  const pulls = useMemo(() => {
+    const syncedIds = new Set(syncedPulls.map((pull) => pull.id))
+    return client.applyConfirmedInboxLifecycles([
+      ...syncedPulls,
+      ...repositoryData.items.filter((pull) => !syncedIds.has(pull.id)),
+    ])
+  }, [client, lifecycleRevision, syncedPulls, repositoryData.items])
+  const [selectedRepo, selectedNumber] = location.pull?.split("#") ?? []
+  const [selectedOwner, selectedName] = selectedRepo?.split("/") ?? []
+  const selectedPull = pulls.find((pull) => `${pull.repo}#${pull.number}` === location.pull)
+  const selectedId = selectedPull?.id ?? null
+  const tab = location.pullTab ?? "conversation"
+  const setTab = (pullTab: PullTab) => location.update({ pullTab }, true)
+  const [failures, setFailures] = useState(initialView?.failures ?? false)
+  const [settledLimit, setSettledLimit] = useState(initialView?.settledLimit ?? 10)
+  const [snoozePickerId, setSnoozePickerId] = useState<string | null>(null)
+  const [scope, setScope] = useState<"involving" | "all">(
+    initialView?.scope ?? (entityScope ? "all" : "involving"),
+  )
+  const [text, setText] = useState(initialView?.text ?? "")
   const [now, setNow] = useState(Date.now)
   const [online, setOnline] = useState(() => navigator.onLine)
+  const [orderReady, setOrderReady] = useState(false)
+  const [draggingId, setDraggingId] = useState<string | null>(null)
+  const [dragOverId, setDragOverId] = useState<string | null>(null)
+  const [dropPosition, setDropPosition] = useState<DropPosition | null>(null)
   const search = useRef<HTMLInputElement>(null)
-  useWatch((c) => c.watchGroup("me"), [])
-  const status = useJobStatus(jobKeys.groupPulls("me"))
-
+  const inboxPane = useRef<HTMLDivElement>(null)
+  const currentView = useRef<InboxViewState>({ text, scope, failures, settledLimit, scroll: 0 })
+  useLayoutEffect(() => {
+    currentView.current = { ...currentView.current, text, scope, failures, settledLimit }
+  }, [text, scope, failures, settledLimit])
   useEffect(() => {
+    const pane = inboxPane.current
+    return () => {
+      const views = savedViews.get(client) ?? new Map<string, InboxViewState>()
+      views.set(viewKey, {
+        ...currentView.current,
+        scroll: pane?.querySelector(".inbox-primary-list")?.scrollTop ?? 0,
+      })
+      savedViews.set(client, views)
+    }
+  }, [client, viewKey])
+  const orderAccount = useRef(viewer.login)
+  const geometry = useInboxGeometry(inboxPane)
+  const { busyIds, latestUndo, runMutation, runRowMutation } = useInboxMutations()
+  const watchedGroup = entityScope?.groupId ?? "me"
+  useWatch((c) => (active ? c.watchGroup(watchedGroup) : () => {}), [watchedGroup, active])
+  const status = useJobStatus(jobKeys.groupPulls(watchedGroup))
+  useEffect(() => () => cancelInboxDragOnUnmount(), [])
+  useErrorToast(status?.error, { id: "inbox-sync-error", title: "Could not refresh inbox" })
+  const [reconcileError, setReconcileError] = useState<unknown>(null)
+  useErrorToast(reconcileError, {
+    id: "inbox-reconcile-error",
+    title: "Could not update inbox state",
+  })
+
+  const {
+    fullEntries,
+    entries,
+    failuresList,
+    pinnedEntries,
+    activeEntries,
+    snoozedEntries,
+    settledEntries,
+    selected,
+    selectedEntry,
+    visibleSettled,
+    visibleSettledRows,
+  } = useInboxModel({
+    pulls,
+    groups,
+    accountLogin: viewer.login,
+    preferences,
+    now,
+    scope,
+    text,
+    selectedId,
+    settledLimit,
+    entityScope,
+  })
+  useEffect(() => {
+    if (!active) return
+    let current = true
+    setOrderReady(false)
+    void client
+      .ensureInboxOrder(viewer.login, fullEntries)
+      .then(() => {
+        if (current) setOrderReady(true)
+      })
+      .catch((error: unknown) => {
+        if (current) toast.error(`Couldn't prepare inbox order: ${String(error)}`)
+      })
+    return () => {
+      current = false
+    }
+  }, [client, viewer.login, fullEntries, active])
+  useEffect(() => {
+    if (orderAccount.current !== viewer.login) {
+      orderAccount.current = viewer.login
+      setSettledLimit(10)
+      setSnoozePickerId(null)
+      location.update({ pull: undefined, pullTab: undefined, run: undefined, job: undefined }, true)
+      latestUndo.current = null
+    }
+  }, [latestUndo, viewer.login, location.update])
+  useEffect(() => {
+    if (!active) return
     const tick = () => {
       setNow(Date.now())
       setOnline(navigator.onLine)
@@ -54,355 +182,394 @@ export function Inbox() {
       window.removeEventListener("online", tick)
       window.removeEventListener("offline", tick)
     }
-  }, [])
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reconcile when persisted preferences hydrate or change
+  }, [active])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reconcile when preferences hydrate or change
   useEffect(() => {
+    if (!active) return
+    let cancelled = false
     void client
-      .reconcileInboxState(viewer.login, pulls, now, groups)
-      .catch((error: unknown) => toast.error(String(error)))
-  }, [client, viewer.login, pulls, groups, preferences, now])
+      .reconcileInboxState(viewer.login, syncedPulls, now, groups)
+      .then(() => {
+        if (!cancelled) setReconcileError(null)
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) setReconcileError(error)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [client, viewer.login, syncedPulls, groups, preferences, now, active])
+  useEffect(() => {
+    if (!savedView.current || fullEntries.length === 0 || !active) return
+    const list = inboxPane.current?.querySelector(".inbox-primary-list")
+    if (list) list.scrollTop = savedView.current.scroll
+    savedView.current = undefined
+  }, [fullEntries.length, active])
+  const dragDisabled = Boolean(entityScope) || failures || !orderReady
 
-  const entries = useMemo(
-    () =>
-      deriveInboxPulls(pulls, groups, viewer.login, preferences, now, scope).sort(
-        (a, b) =>
-          b.pull.updatedAt.localeCompare(a.pull.updatedAt) ||
-          a.pull.repo.localeCompare(b.pull.repo) ||
-          a.pull.number - b.pull.number,
-      ),
-    [pulls, groups, viewer.login, preferences, now, scope],
-  )
-  const visible = entries.filter(({ pull, state }) => {
-    if (
-      view === "failures" ? !["FAILURE", "ERROR"].includes(pull.checkState ?? "") : state !== view
-    )
-      return false
-    return `${pull.repo} #${pull.number} ${pull.title} ${pull.author ?? ""}`
-      .toLowerCase()
-      .includes(text.trim().toLowerCase())
-  })
-  const selected = entries.find((entry) => entry.pull.id === selectedId)
   const select = (pull: PullRequest) => {
-    setSelectedId(pull.id)
-    setTab("conversation")
+    const entry = fullEntries.find((item) => item.pull.id === pull.id)
+    if (entry?.state === "settled") {
+      const index = settledEntries.findIndex((item) => item.pull.id === pull.id)
+      if (index >= settledLimit) setSettledLimit(index + 1)
+    }
+    location.update({
+      pull: `${pull.repo}#${pull.number}`,
+      pullTab: undefined,
+      run: undefined,
+      job: undefined,
+    })
   }
-  const step = (direction: number) => {
-    const index = visible.findIndex((entry) => entry.pull.id === selectedId)
-    const next = visible[Math.max(0, Math.min(visible.length - 1, index + direction))]
-    if (next) select(next.pull)
+  const navigable = failures
+    ? failuresList
+    : [...pinnedEntries, ...activeEntries, ...snoozedEntries, ...settledEntries]
+  const step = (direction: -1 | 1) => {
+    if (navigable.length === 0) return
+    const currentIndex = navigable.findIndex((entry) => entry.pull.id === selectedId)
+    const nextIndex =
+      currentIndex < 0 ? 0 : Math.max(0, Math.min(navigable.length - 1, currentIndex + direction))
+    const next = navigable[nextIndex]
+    if (!next) return
+    select(next.pull)
+    if (next.state === "settled") {
+      const settledIndex = settledEntries.findIndex((entry) => entry.pull.id === next.pull.id)
+      if (settledIndex >= settledLimit) setSettledLimit(settledIndex + 1)
+    }
+    requestAnimationFrame(() =>
+      document
+        .querySelector<HTMLElement>(`[data-pull-id="${CSS.escape(next.pull.id)}"]`)
+        ?.scrollIntoView({ block: "nearest" }),
+    )
   }
-  useShortcuts({ j: () => step(1), k: () => step(-1), "/": () => search.current?.focus() })
+  useShortcuts(
+    { j: () => step(1), k: () => step(-1), "/": () => search.current?.focus() },
+    active && !location.run,
+  )
+
+  const applyDetailMutation = (
+    label: string,
+    mutation: () => Promise<InboxMutationResult>,
+    closePopover?: () => void,
+  ) => {
+    if (selected) void runMutation(selected.pull, label, mutation).then(closePopover)
+  }
+  const drag = useInboxDrag({
+    entries,
+    pinnedEntries,
+    activeEntries,
+    settledEntries,
+    failures,
+    orderReady: orderReady && !entityScope,
+    draggingId,
+    dragOverId,
+    setDraggingId,
+    setDragOverId,
+    setDropPosition,
+    onSnoozeDrop: (pull) => setSnoozePickerId(pull.id),
+    runMutation,
+  })
+  const renderRow = (entry: InboxPull) => (
+    <InboxRow
+      key={entry.pull.id}
+      entry={entry}
+      selected={selectedId === entry.pull.id}
+      now={now}
+      online={online}
+      dragDisabled={dragDisabled}
+      busy={busyIds.has(entry.pull.id)}
+      snoozePickerOpen={snoozePickerId === entry.pull.id}
+      onSnoozePickerOpenChange={(open) => setSnoozePickerId(open ? entry.pull.id : null)}
+      onSelect={select}
+      onPrefetch={(pull) => void client.prefetchPull(pull.repo, pull.number)}
+      onPin={(pull) =>
+        runRowMutation(pull, "Pinned", () => client.pinInboxPull(viewer.login, pull))
+      }
+      onUnpin={(pull) =>
+        runRowMutation(pull, "Unpinned", () => client.unpinInboxPull(viewer.login, pull))
+      }
+      onSnooze={(pull, until) =>
+        runRowMutation(
+          pull,
+          "Snoozed",
+          () => client.setInboxSnoozed(viewer.login, pull, until),
+          "snoozed",
+        )
+      }
+      onSettle={(pull) =>
+        runRowMutation(
+          pull,
+          "Settled locally · GitHub PR unchanged",
+          () => client.settleInboxPull(viewer.login, pull),
+          "settled",
+        )
+      }
+      onRestore={(pull) => {
+        const current = fullEntries.find((item) => item.pull.id === pull.id)
+        if (current?.state === "snoozed")
+          runRowMutation(
+            pull,
+            "Woke to previous position",
+            () => client.wakeInboxPull(viewer.login, pull),
+            "row",
+          )
+        else
+          runRowMutation(
+            pull,
+            "Returned to Active",
+            () => client.restoreInboxPull(viewer.login, pull),
+            "row",
+          )
+      }}
+      onMove={drag.moveBy}
+    />
+  )
+  const selectedTerminalState = selected
+    ? selected.pull.state === "MERGED" || selected.preference?.terminalState === "MERGED"
+      ? "MERGED"
+      : selected.pull.state === "CLOSED" ||
+          (selected.preference?.terminalState === "CLOSED" &&
+            !(
+              selected.pull.state === "OPEN" &&
+              selected.pull.stateObservedAt &&
+              Date.parse(selected.pull.stateObservedAt) >
+                Date.parse(selected.preference.terminalObservedAt ?? selected.preference.changedAt)
+            ))
+        ? "CLOSED"
+        : undefined
+    : undefined
 
   return (
-    <div className="flex h-full min-w-0 flex-col">
-      <header className="flex flex-wrap items-center gap-3 border-b px-4 py-3">
-        <h1 className="font-semibold">PR inbox</h1>
-        <select
-          aria-label="Inbox scope"
-          className="rounded-md border bg-background px-2 py-1 text-sm"
-          value={scope}
-          onChange={(e) => {
-            setScope(e.target.value as typeof scope)
-            setSelectedId(null)
-          }}
-        >
-          <option value="involving">Involving me</option>
-          <option value="all">All synced PRs</option>
-        </select>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Refresh inbox"
-          className="ml-auto"
-          onClick={() =>
-            void Promise.all(groups.map((g) => client.refresh(jobKeys.groupPulls(g.id))))
-          }
-        >
-          <RefreshCwIcon className={cn(status?.running && "animate-spin")} />
-        </Button>
-      </header>
-      <p className="border-b px-4 py-2 text-xs text-muted-foreground">
-        {!online && "Offline · Showing cached PRs. "}PRs from synced groups. GitHub access and
-        result limits apply. Snooze and settle are private to this app.
-      </p>
-      <div className="flex min-h-0 flex-1">
-        <section
+    <div ref={inboxPane} className="relative flex h-full min-w-0">
+      <DndContext
+        sensors={drag.sensors}
+        collisionDetection={(args) => {
+          const collisions = pointerWithin(args)
+          const row = collisions.find(
+            (collision) => !String(collision.id).startsWith("inbox-drop:"),
+          )
+          return row ? [row] : collisions.slice(0, 1)
+        }}
+        onDragStart={drag.onDragStart}
+        onDragOver={drag.onDragOver}
+        onDragMove={drag.onDragOver}
+        onDragCancel={drag.onDragCancel}
+        onDragEnd={drag.onDragEnd}
+      >
+        <aside
           aria-label="Pull request inbox"
+          data-inbox-ready={orderReady && !repositoryData.refreshing}
+          style={{ width: geometry.mobile ? "100%" : geometry.width }}
           className={cn(
-            "min-h-0 w-full shrink-0 flex-col border-r lg:flex lg:w-80 xl:w-96",
-            selected ? "hidden" : "flex",
+            "relative flex min-h-0 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground",
+            geometry.mobile && location.pull ? "hidden" : "flex",
           )}
         >
-          <div className="flex flex-col gap-2 border-b p-3">
-            <fieldset className="flex flex-wrap gap-1" aria-label="Inbox state">
-              {(["active", "snoozed", "settled", "failures"] as const).map((state) => (
-                <Button
-                  key={state}
-                  size="sm"
-                  variant={view === state ? "secondary" : "ghost"}
-                  aria-pressed={view === state}
-                  onClick={() => {
-                    setView(state)
-                    setSelectedId(null)
-                  }}
-                >
-                  {state === "failures" ? "Failures" : state[0]!.toUpperCase() + state.slice(1)}
-                </Button>
-              ))}
-            </fieldset>
-            <Input
-              ref={search}
-              aria-label="Filter inbox"
-              placeholder="Filter PRs /"
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-            />
-            {view === "failures" && (
+          <InboxHeader
+            search={search}
+            text={text}
+            onTextChange={setText}
+            scope={scope}
+            onScopeChange={setScope}
+            failures={failures}
+            onToggleFailures={() => setFailures((value) => !value)}
+            onRefresh={() => {
+              if (entityScope?.repo) repositoryData.refresh()
+              else if (entityScope?.groupId)
+                void client.refresh(jobKeys.groupPulls(entityScope.groupId))
+              else
+                void Promise.all(
+                  groups.map((group) => client.refresh(jobKeys.groupPulls(group.id))),
+                )
+            }}
+            refreshing={entityScope?.repo ? repositoryData.refreshing : Boolean(status?.running)}
+            online={online}
+          />
+          {entityScope && (
+            <div className="px-4 py-2">
               <p className="text-xs text-muted-foreground">
-                Failures across all states, including snoozed and settled.
+                Filtered to {entityScope.repo ?? entityScope.groupId?.replace(/^(org|team):/, "")}.
+                Reordering is available in the global Inbox.
               </p>
-            )}
-          </div>
-          <ul className="min-h-0 flex-1 overflow-y-auto">
-            {visible.map((entry) => (
-              <li key={entry.pull.id} className="border-b">
-                <button
-                  type="button"
-                  className={cn(
-                    "flex w-full flex-col gap-1.5 px-3 py-3 text-left text-sm hover:bg-accent/50 focus-visible:outline focus-visible:outline-ring",
-                    selectedId === entry.pull.id && "bg-accent",
+              {entityScope.repo && (
+                <div className="mt-1 flex items-center gap-2">
+                  <RepositoryCacheStatus states={[repositoryData.state]} />
+                  {repositoryData.state.loaded && repositoryData.error && (
+                    <button
+                      type="button"
+                      onClick={repositoryData.retry}
+                      className="shrink-0 text-xs underline"
+                    >
+                      Retry
+                    </button>
                   )}
-                  aria-current={selectedId === entry.pull.id ? "true" : undefined}
-                  onClick={() => select(entry.pull)}
-                >
-                  <span className="text-xs font-semibold break-all">
-                    {entry.pull.repo} #{entry.pull.number}
-                  </span>
-                  <span className="font-medium">
-                    {entry.pull.isDraft && "Draft: "}
-                    {entry.pull.title}
-                  </span>
-                  <span className="flex flex-wrap items-center gap-2 text-xs">
-                    <InboxCheck pull={entry.pull} now={now} online={online} />
-                    <ReviewBadge decision={entry.pull.reviewDecision} />
-                  </span>
-                  <span className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                    <span className="capitalize">{entry.state}</span>
-                    {entry.state === "snoozed" && entry.preference?.snoozedUntil && (
-                      <span>Until {new Date(entry.preference.snoozedUntil).toLocaleString()}</span>
-                    )}
-                    <RelativeTime iso={entry.pull.updatedAt} />
-                  </span>
-                </button>
-              </li>
-            ))}
-            {visible.length === 0 && (
-              <li className="p-6 text-center text-sm text-muted-foreground">
-                {status?.running && !status.lastSuccess
-                  ? "Loading pull requests…"
-                  : "No pull requests in this view."}
-              </li>
-            )}
-          </ul>
-        </section>
+                  {repositoryData.pages > 0 && (
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      {repositoryData.pages} page{repositoryData.pages === 1 ? "" : "s"} cached
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+          {Boolean(repositoryData.error) && !repositoryData.state.loaded && (
+            <div role="alert" className="p-3 text-sm">
+              Could not load repository pull requests.{" "}
+              <button type="button" onClick={repositoryData.retry} className="underline">
+                Retry
+              </button>
+            </div>
+          )}
+          <InboxSections
+            failures={failures}
+            failuresList={failuresList}
+            loading={Boolean(status?.running && !status.lastSuccess)}
+            pinnedEntries={pinnedEntries}
+            activeEntries={activeEntries}
+            snoozedEntries={snoozedEntries}
+            settledEntries={settledEntries}
+            visibleSettledRows={visibleSettledRows}
+            visibleSettledCount={visibleSettled.length}
+            dragDisabled={dragDisabled}
+            dragging={Boolean(draggingId)}
+            dropPosition={dropPosition}
+            renderRow={renderRow}
+            onShowMoreSettled={() => setSettledLimit((limit) => limit + 25)}
+          />
+          {repositoryData.loading && (
+            <p role="status" className="p-3 text-sm">
+              Loading repository pull requests…
+            </p>
+          )}
+          {repositoryData.more && !repositoryData.loading && !repositoryData.error && (
+            <button
+              type="button"
+              className="p-3 text-sm underline"
+              onClick={repositoryData.loadMore}
+            >
+              Load more pull requests
+            </button>
+          )}
+          {!entityScope && <ContributionCalendar />}
+          {!geometry.mobile && (
+            <div
+              {...geometry.separatorProps}
+              className="absolute inset-y-0 -right-1 z-20 w-2 cursor-col-resize touch-none bg-transparent hover:bg-ring/40 focus-visible:bg-ring/40"
+            />
+          )}
+        </aside>
         <section
           aria-label="Selected pull request"
-          className={cn("min-h-0 min-w-0 flex-1 flex-col", selected ? "flex" : "hidden lg:flex")}
+          className={cn(
+            "flex min-w-0 flex-1 flex-col overflow-hidden",
+            geometry.mobile && !location.pull && "hidden",
+          )}
         >
           {selected ? (
-            <>
-              <InboxActions
+            <div className="flex min-h-0 flex-1 flex-col">
+              {!selectedEntry && (
+                <p role="status" className="px-4 py-2 text-xs text-muted-foreground">
+                  This PR is outside the current filters. Your selection is retained.
+                </p>
+              )}
+              <PullContent
                 key={selected.pull.id}
-                pull={selected.pull}
-                state={selected.state}
-                snoozedUntil={selected.preference?.snoozedUntil}
+                active={active}
+                hideRepositoryContext={Boolean(entityScope)}
+                owner={selected.pull.repo.split("/")[0]!}
+                name={selected.pull.repo.split("/")[1]!}
+                number={selected.pull.number}
+                tab={tab}
+                onTabChange={setTab}
+                onBack={() => {
+                  location.update({
+                    pull: undefined,
+                    pullTab: undefined,
+                    run: undefined,
+                    job: undefined,
+                  })
+                  requestAnimationFrame(() => {
+                    const row = inboxPane.current?.querySelector<HTMLElement>(
+                      `[data-pull-id="${CSS.escape(selected.pull.id)}"] button`,
+                    )
+                    ;(row ?? search.current)?.focus()
+                  })
+                }}
+                backLabel="Back to inbox"
+                actions={
+                  <InboxActions
+                    key={selected.pull.id}
+                    state={selected.state}
+                    terminalState={selectedTerminalState}
+                    snoozedUntil={selected.preference?.snoozedUntil}
+                    busy={busyIds.has(selected.pull.id)}
+                    onSnooze={(until, close) =>
+                      applyDetailMutation(
+                        `Snoozed until ${new Date(until).toLocaleString()}`,
+                        () =>
+                          client.setInboxSnoozed(
+                            viewer.login,
+                            selected.pull,
+                            new Date(until).toISOString(),
+                          ),
+                        close,
+                      )
+                    }
+                    onSettle={(close) =>
+                      applyDetailMutation(
+                        "Settled locally · GitHub PR unchanged",
+                        () => client.settleInboxPull(viewer.login, selected.pull),
+                        close,
+                      )
+                    }
+                    onRestore={() =>
+                      applyDetailMutation("Returned to Active", () =>
+                        selected.state === "snoozed"
+                          ? client.wakeInboxPull(viewer.login, selected.pull)
+                          : client.restoreInboxPull(viewer.login, selected.pull),
+                      )
+                    }
+                  />
+                }
               />
-              <div className="min-h-0 flex-1">
-                <PullContent
-                  key={selected.pull.id}
-                  owner={selected.pull.repo.split("/")[0]!}
-                  name={selected.pull.repo.split("/")[1]!}
-                  number={selected.pull.number}
-                  tab={tab}
-                  onTabChange={setTab}
-                  onBack={() => setSelectedId(null)}
-                />
-              </div>
-            </>
+            </div>
+          ) : selectedOwner && selectedName && selectedNumber ? (
+            <PullContent
+              key={location.pull}
+              owner={selectedOwner}
+              name={selectedName}
+              number={Number(selectedNumber)}
+              tab={tab}
+              onTabChange={setTab}
+              active={active}
+              hideRepositoryContext={Boolean(entityScope)}
+              onBack={() =>
+                location.update({
+                  pull: undefined,
+                  pullTab: undefined,
+                  run: undefined,
+                  job: undefined,
+                })
+              }
+              backLabel="Back to inbox"
+            />
           ) : (
-            <p className="m-auto p-6 text-center text-sm text-muted-foreground">
+            <p className="m-auto max-w-sm p-6 text-center text-sm text-muted-foreground">
               Select a PR to review its conversation, files and checks.
             </p>
           )}
         </section>
-      </div>
-    </div>
-  )
-}
-
-function InboxCheck({ pull, now, online }: { pull: PullRequest; now: number; online: boolean }) {
-  const status = useJobStatus(jobKeys.groupPulls(pull.groupId))
-  const stale = !status?.lastSuccess || now - status.lastSuccess > 3 * 60_000
-  const state = rollupState(pull.checkState)
-  if (!online || status?.error || stale)
-    return (
-      <span className="text-muted-foreground">
-        {!online ? "Offline · " : status?.error ? "Sync failed · " : "Awaiting refresh · "}last
-        check: {state ?? "unknown"}
-      </span>
-    )
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1",
-        state === "failure" && "font-semibold text-destructive",
-      )}
-    >
-      {state && <StateIcon state={state} />}
-      {state === "failure"
-        ? "Checks failed"
-        : state === "success"
-          ? "Checks passed"
-          : state === "pending"
-            ? "Checks pending"
-            : "Checks unknown"}
-    </span>
-  )
-}
-
-function InboxActions({
-  pull,
-  state,
-  snoozedUntil,
-}: {
-  pull: PullRequest
-  state: "active" | "snoozed" | "settled"
-  snoozedUntil?: string | null
-}) {
-  const { client, viewer } = useSession()
-  const [busy, setBusy] = useState(false)
-  const [open, setOpen] = useState(false)
-  const [custom, setCustom] = useState("")
-  const run = async (action: () => Promise<unknown>, label: string, undo = false) => {
-    setBusy(true)
-    try {
-      await action()
-      setOpen(false)
-      toast.success(
-        label,
-        undo
-          ? {
-              action: {
-                label: "Undo",
-                onClick: () => {
-                  void client
-                    .restoreInboxPull(viewer.login, pull)
-                    .catch((error: unknown) => toast.error(String(error)))
-                },
-              },
-            }
-          : undefined,
-      )
-    } catch (error) {
-      toast.error(String(error))
-    } finally {
-      setBusy(false)
-    }
-  }
-  const snooze = (until: number) => {
-    if (!Number.isFinite(until) || until <= Date.now()) {
-      toast.error("Choose a future return time.")
-      return
-    }
-    void run(
-      () => client.setInboxSnoozed(viewer.login, pull, new Date(until).toISOString()),
-      `Snoozed until ${new Date(until).toLocaleString()}`,
-      true,
-    )
-  }
-  const tomorrow = () => {
-    const date = new Date()
-    date.setDate(date.getDate() + 1)
-    date.setHours(9, 0, 0, 0)
-    return date.getTime()
-  }
-  return (
-    <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2">
-      <span className="mr-auto text-xs text-muted-foreground">
-        {state === "settled"
-          ? "Settled locally · GitHub PR unchanged"
-          : state === "snoozed"
-            ? `Snoozed until ${snoozedUntil ? new Date(snoozedUntil).toLocaleString() : "return time"}`
-            : "Active"}
-      </span>
-      {state === "active" ? (
-        <>
-          <Popover open={open} onOpenChange={setOpen}>
-            <PopoverTrigger render={<Button variant="outline" size="sm" disabled={busy} />}>
-              <ClockIcon />
-              Snooze
-            </PopoverTrigger>
-            <PopoverContent align="end">
-              <PopoverTitle>Return to Active</PopoverTitle>
-              <Button
-                variant="ghost"
-                className="justify-start"
-                disabled={busy}
-                onClick={() => snooze(Date.now() + 60 * 60_000)}
-              >
-                In one hour
-              </Button>
-              <Button
-                variant="ghost"
-                className="justify-start"
-                disabled={busy}
-                onClick={() => snooze(tomorrow())}
-              >
-                Tomorrow at 9:00 AM
-              </Button>
-              <label className="text-xs" htmlFor="snooze-time">
-                Custom time ({Intl.DateTimeFormat().resolvedOptions().timeZone})
-              </label>
-              <Input
-                id="snooze-time"
-                type="datetime-local"
-                value={custom}
-                onChange={(e) => setCustom(e.target.value)}
-              />
-              <Button disabled={busy || !custom} onClick={() => snooze(new Date(custom).getTime())}>
-                Snooze until selected time
-              </Button>
-            </PopoverContent>
-          </Popover>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={busy}
-            onClick={() =>
-              void run(
-                () => client.settleInboxPull(viewer.login, pull),
-                "Settled locally. GitHub PR unchanged.",
-                true,
-              )
-            }
-          >
-            <CheckIcon />
-            Settle
-          </Button>
-        </>
-      ) : (
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={busy}
-          onClick={() =>
-            void run(() => client.restoreInboxPull(viewer.login, pull), "Returned to Active")
-          }
-        >
-          <Undo2Icon />
-          Restore to Active
-        </Button>
-      )}
+        <DragOverlay dropAnimation={null}>
+          {drag.dragLabel && (
+            <div
+              role="status"
+              aria-label="Dragging pull request"
+              className="rounded-md border bg-popover px-3 py-2 text-sm shadow-lg"
+            >
+              {drag.dragLabel}
+            </div>
+          )}
+        </DragOverlay>
+      </DndContext>
     </div>
   )
 }

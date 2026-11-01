@@ -12,16 +12,18 @@ import { Tabs, TabsList, TabsTrigger } from "@github-client/ui/components/tabs"
 import { cn } from "@github-client/ui/lib/utils"
 import { eq } from "@tanstack/db"
 import { useLiveQuery } from "@tanstack/react-db"
-import { useNavigate } from "@tanstack/react-router"
 import { ExternalLinkIcon, PlayIcon, RefreshCwIcon } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useClient, useJobStatus, useWatch } from "@/app/client"
-import { runsRoute } from "@/app/router"
+import { useErrorToast } from "@/app/errors"
 import { useShortcuts } from "@/app/shortcuts"
+import { RepositoryContext } from "@/components/repository-context"
 import { type RunState, runState, StateIcon } from "@/components/status"
 import { duration, RelativeTime } from "@/components/time"
 import { openExternal } from "@/platform"
+import { useInboxLocation } from "../inbox-location"
 import { DispatchDialog } from "./dispatch-dialog"
+import { RunDialog } from "./run-dialog"
 
 type StatusFilter = "all" | "active" | "failed" | "succeeded"
 
@@ -34,11 +36,20 @@ const STATUS_MATCH: Record<StatusFilter, (state: RunState) => boolean> = {
 
 const ALL_WORKFLOWS = "all"
 
-export function RunsPage() {
-  const { owner, repo: name } = runsRoute.useParams()
+export function RunsContent({
+  owner,
+  name,
+  embedded = false,
+  active = true,
+}: {
+  owner: string
+  name: string
+  embedded?: boolean
+  active?: boolean
+}) {
   const repo = `${owner}/${name}`
   const client = useClient()
-  const navigate = useNavigate()
+  const location = useInboxLocation()
   const [workflow, setWorkflow] = useState<string>(ALL_WORKFLOWS)
   const [status, setStatus] = useState<StatusFilter>("all")
   const [text, setText] = useState("")
@@ -46,9 +57,18 @@ export function RunsPage() {
   const [dispatching, setDispatching] = useState(false)
   const searchRef = useRef<HTMLInputElement>(null)
 
-  useWatch((c) => c.watchRuns(repo), [repo])
-  useWatch((c) => c.watchWorkflows(repo), [repo])
+  useWatch((c) => (active ? c.watchRuns(repo) : () => {}), [repo, active])
+  useWatch((c) => (active ? c.watchWorkflows(repo) : () => {}), [repo, active])
   const sync = useJobStatus(jobKeys.runs(repo))
+  const workflowsSync = useJobStatus(jobKeys.workflows(repo))
+  useErrorToast(sync?.error, {
+    id: `actions-runs-error:${repo}`,
+    title: `Could not refresh ${repo} workflow runs`,
+  })
+  useErrorToast(workflowsSync?.error, {
+    id: `actions-workflows-error:${repo}`,
+    title: `Could not refresh ${repo} workflows`,
+  })
   const runs = useLiveQuery(
     (q) =>
       q
@@ -86,11 +106,7 @@ export function RunsPage() {
 
   const open = (run: WorkflowRun | undefined) => {
     if (!run) return
-    void navigate({
-      to: "/actions/$owner/$repo/runs/$runId",
-      params: { owner, repo: name, runId: String(run.id) },
-      search: {},
-    })
+    location.update({ run: run.id, job: undefined })
   }
   const refresh = () =>
     Promise.all([client.refresh(jobKeys.runs(repo)), client.refresh(jobKeys.workflows(repo))])
@@ -99,25 +115,38 @@ export function RunsPage() {
     {
       j: () => setSelected((i) => Math.min(i + 1, visible.length - 1)),
       k: () => setSelected((i) => Math.max(i - 1, 0)),
+      // biome-ignore lint/correctness/noComponentHookFactories: key names follow KeyboardEvent.key
       ArrowDown: () => setSelected((i) => Math.min(i + 1, visible.length - 1)),
+      // biome-ignore lint/correctness/noComponentHookFactories: key names follow KeyboardEvent.key
       ArrowUp: () => setSelected((i) => Math.max(i - 1, 0)),
+      // biome-ignore lint/correctness/noComponentHookFactories: key names follow KeyboardEvent.key
       Enter: () => open(visible[selected]),
       o: () => visible[selected] && void openExternal(visible[selected].url),
       "/": () => searchRef.current?.focus(),
       r: () => void refresh(),
     },
-    !dispatching,
+    active && !dispatching && !location.run,
   )
 
   const workflowName = (id: string) =>
     id === ALL_WORKFLOWS ? "All workflows" : workflows.find((w) => String(w.id) === id)?.name
 
   return (
-    <div className="flex h-full flex-col">
-      <header className="flex items-center gap-3 border-b px-4 py-2">
-        <h1 className="truncate font-semibold">
-          {repo} <span className="font-normal text-muted-foreground">· Actions</span>
-        </h1>
+    <div className="flex h-full min-w-0 flex-col">
+      {!embedded && <RepositoryContext owner={owner} repo={name} location="Actions" />}
+      {active && location.run && (
+        <RunDialog
+          open
+          owner={owner}
+          name={name}
+          runId={location.run}
+          job={location.job}
+          onJobChange={(job) => location.update({ job }, true)}
+          onBack={() => location.update({ run: undefined, job: undefined })}
+        />
+      )}
+      <header className="flex flex-wrap items-center gap-3 border-b px-4 py-2">
+        <h1 className="truncate font-semibold">Workflow runs</h1>
         <Tabs value={status} onValueChange={(v) => setStatus(v as StatusFilter)}>
           <TabsList>
             <TabsTrigger value="all">All</TabsTrigger>
@@ -164,11 +193,6 @@ export function RunsPage() {
           <ExternalLinkIcon />
         </Button>
       </header>
-      {sync?.error ? (
-        <p className="border-b bg-destructive/10 px-4 py-1.5 text-xs text-destructive">
-          Sync failed: {String((sync.error as Error).message ?? sync.error)}
-        </p>
-      ) : null}
       <ul className="flex-1 overflow-y-auto">
         {visible.map((run, index) => (
           <RunRow
@@ -182,7 +206,11 @@ export function RunsPage() {
         ))}
         {visible.length === 0 && (
           <li className="p-8 text-center text-sm text-muted-foreground">
-            {sync?.lastSuccess || runs.length > 0 ? "No matching runs." : "Loading runs…"}
+            {sync?.error && sync.lastSuccess === undefined && runs.length === 0
+              ? "Could not load workflow runs. Use Refresh to try again."
+              : sync?.lastSuccess || runs.length > 0
+                ? "No matching runs."
+                : "Loading runs…"}
           </li>
         )}
       </ul>

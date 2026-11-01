@@ -12,24 +12,46 @@ import {
 } from "@github-client/core/actions/repository-settings"
 import { Button } from "@github-client/ui/components/button"
 import { Checkbox } from "@github-client/ui/components/checkbox"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@github-client/ui/components/dialog"
 import { Input } from "@github-client/ui/components/input"
 import { Label } from "@github-client/ui/components/label"
-import { Link } from "@tanstack/react-router"
+import { useBlocker } from "@tanstack/react-router"
 import { useEffect, useRef, useState } from "react"
 import { useSession } from "@/app/client"
+import { showError, useErrorToast } from "@/app/errors"
+import { RepositoryContext } from "@/components/repository-context"
 
-export function RepositorySettings({ owner, repo }: { owner: string; repo: string }) {
+export function RepositorySettings({
+  owner,
+  repo,
+  embedded = false,
+}: {
+  owner: string
+  repo: string
+  embedded?: boolean
+}) {
   const { client } = useSession()
   const [settings, setSettings] = useState<RepositorySettingsData | null>(null)
   const [draft, setDraft] = useState<RepositorySettingsDraft | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [loadError, setLoadError] = useState<{ repoName: string; message: string } | null>(null)
+  const [recoveryMessage, setRecoveryMessage] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [uncertainFields, setUncertainFields] = useState<RepositorySettingsField[] | null>(null)
   const [mergeError, setMergeError] = useState<string | null>(null)
   const requestVersion = useRef(0)
   const repoName = `${owner}/${repo}`
+  const currentLoadError = loadError?.repoName === repoName ? loadError.message : null
+  useErrorToast(currentLoadError, {
+    id: `repository-settings-load:${repoName}`,
+    title: `Could not load settings for ${repoName}`,
+  })
 
   useEffect(() => {
     const version = ++requestVersion.current
@@ -37,7 +59,8 @@ export function RepositorySettings({ owner, repo }: { owner: string; repo: strin
     setSaving(false)
     setSettings(null)
     setDraft(null)
-    setError(null)
+    setLoadError(null)
+    setRecoveryMessage(null)
     setNotice(null)
     setUncertainFields(null)
     setMergeError(null)
@@ -48,7 +71,7 @@ export function RepositorySettings({ owner, repo }: { owner: string; repo: strin
         setDraft(toDraft(loaded))
       })
       .catch((cause: unknown) => {
-        if (requestVersion.current === version) setError(message(cause))
+        if (requestVersion.current === version) setLoadError({ repoName, message: message(cause) })
       })
       .finally(() => {
         if (requestVersion.current === version) setLoading(false)
@@ -56,13 +79,13 @@ export function RepositorySettings({ owner, repo }: { owner: string; repo: strin
     return () => {
       requestVersion.current++
     }
-  }, [client, owner, repo])
+  }, [client, owner, repo, repoName])
 
   const setField = <K extends keyof RepositorySettingsDraft>(
     key: K,
     value: RepositorySettingsDraft[K],
   ) => {
-    setError(null)
+    setRecoveryMessage(null)
     setNotice(null)
     setDraft((current) => (current ? { ...current, [key]: value } : current))
   }
@@ -72,7 +95,7 @@ export function RepositorySettings({ owner, repo }: { owner: string; repo: strin
     value: boolean,
   ) => {
     if (!draft) return
-    setError(null)
+    setRecoveryMessage(null)
     setNotice(null)
     const next = { ...draft, [key]: value }
     if (!next.allowSquashMerge && !next.allowRebaseMerge && !next.allowMergeCommit) {
@@ -86,7 +109,7 @@ export function RepositorySettings({ owner, repo }: { owner: string; repo: strin
   const cancel = () => {
     if (settings) setDraft(toDraft(settings))
     setMergeError(null)
-    setError(null)
+    setRecoveryMessage(null)
     setNotice(null)
   }
 
@@ -97,7 +120,7 @@ export function RepositorySettings({ owner, repo }: { owner: string; repo: strin
       changedRepositorySettings(settings, draft),
     ) as RepositorySettingsField[]
     setSaving(true)
-    setError(null)
+    setRecoveryMessage(null)
     setNotice(null)
     try {
       const saved = await updateRepositorySettings(client.rest, owner, repo, settings, draft)
@@ -105,6 +128,7 @@ export function RepositorySettings({ owner, repo }: { owner: string; repo: strin
       setSettings(saved)
       setDraft(toDraft(saved))
       setNotice("GitHub confirmed the updated settings.")
+      return true
     } catch (cause) {
       if (requestVersion.current !== version) return
       if (cause instanceof RepositorySettingsConflictError) {
@@ -113,19 +137,22 @@ export function RepositorySettings({ owner, repo }: { owner: string; repo: strin
         const latestValues = cause.fields
           .map((field) => `${SETTING_LABELS[field]}: ${String(cause.latest[field] ?? "empty")}`)
           .join("; ")
-        setError(
-          `${cause.message}. Current GitHub values: ${latestValues}. Your draft is retained.`,
-        )
+        const recovery = `${cause.message}. Current GitHub values: ${latestValues}. Your draft is retained.`
+        setRecoveryMessage(recovery)
+        showError(`Could not save settings for ${repoName}`, cause)
       } else if (cause instanceof RepositorySettingsPermissionError) {
         setSettings(cause.latest)
         setDraft(rebaseRepositorySettingsDraft(cause.latest, draft, changedFields))
-        setError(`${cause.message}. Your draft is still here.`)
+        setRecoveryMessage(`${cause.message}. Your draft is still here.`)
+        showError(`Could not save settings for ${repoName}`, cause)
       } else if (cause instanceof RepositorySettingsReadbackError) {
         setUncertainFields(changedFields)
         setNotice("GitHub accepted the save, but confirmation is pending.")
-        setError("Your draft is retained while GitHub's updated values are unconfirmed.")
+        setRecoveryMessage("Your draft is retained while GitHub's updated values are unconfirmed.")
+        showError(`Could not confirm settings for ${repoName}`, cause)
       } else {
-        setError(`Save failed. Your draft is still here. ${message(cause)}`)
+        setRecoveryMessage("Your draft is still here. Try saving again.")
+        showError(`Could not save settings for ${repoName}`, cause)
       }
     } finally {
       if (requestVersion.current === version) setSaving(false)
@@ -144,18 +171,20 @@ export function RepositorySettings({ owner, repo }: { owner: string; repo: strin
       setUncertainFields(null)
       if (confirmed) {
         setDraft(toDraft(latest))
-        setError(null)
+        setRecoveryMessage(null)
         setNotice("GitHub confirmed the updated settings.")
       } else {
         setDraft(rebaseRepositorySettingsDraft(latest, draft, uncertainFields))
-        setError(
+        setRecoveryMessage(
           "GitHub's current values differ from the accepted save. Your draft is retained for review.",
         )
         setNotice(null)
       }
     } catch (cause) {
-      if (requestVersion.current === version)
-        setError(`Confirmation is still pending. Your draft is retained. ${message(cause)}`)
+      if (requestVersion.current === version) {
+        setRecoveryMessage("Confirmation is still pending. Your draft is retained.")
+        showError(`Could not confirm settings for ${repoName}`, cause)
+      }
     } finally {
       if (requestVersion.current === version) setSaving(false)
     }
@@ -164,17 +193,57 @@ export function RepositorySettings({ owner, repo }: { owner: string; repo: strin
   const changed =
     settings && draft && Object.keys(changedRepositorySettings(settings, draft)).length > 0
 
+  const blocker = useBlocker({
+    shouldBlockFn: () => Boolean(changed || uncertainFields || saving),
+    enableBeforeUnload: Boolean(changed || uncertainFields || saving),
+    withResolver: true,
+  })
+
   return (
     <div className="h-full overflow-y-auto">
+      <Dialog
+        open={blocker.status === "blocked"}
+        onOpenChange={(open) => {
+          if (!open) blocker.reset?.()
+        }}
+      >
+        <DialogContent>
+          <DialogTitle>Unsaved repository settings</DialogTitle>
+          <DialogDescription>
+            {uncertainFields
+              ? "GitHub accepted a save but its result is still unconfirmed. Stay to retry confirmation."
+              : "Save your changes before leaving, discard them, or stay here."}
+          </DialogDescription>
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button variant="outline" onClick={() => blocker.reset?.()}>
+              Stay
+            </Button>
+            <Button
+              variant="outline"
+              disabled={saving || Boolean(uncertainFields)}
+              onClick={() => {
+                cancel()
+                blocker.proceed?.()
+              }}
+            >
+              Discard
+            </Button>
+            <Button
+              disabled={
+                saving || !settings?.canAdmin || Boolean(mergeError) || Boolean(uncertainFields)
+              }
+              onClick={async () => {
+                if (await save()) blocker.proceed?.()
+              }}
+            >
+              Save and leave
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+      {!embedded && <RepositoryContext owner={owner} repo={repo} location="Settings" />}
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-6">
         <header>
-          <Link
-            to="/actions/$owner/$repo"
-            params={{ owner, repo }}
-            className="text-sm text-muted-foreground hover:text-foreground"
-          >
-            ← {repoName} Actions
-          </Link>
           <p className="text-xs text-muted-foreground">Repository settings</p>
           <h1 className="text-xl font-semibold">{repoName}</h1>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -187,12 +256,12 @@ export function RepositorySettings({ owner, repo }: { owner: string; repo: strin
             You don’t have repository admin access. Settings are read-only.
           </p>
         )}
-        {error && (
+        {recoveryMessage && (
           <p
             role="alert"
             className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
           >
-            {error}
+            {recoveryMessage}
           </p>
         )}
         {notice && (
@@ -204,30 +273,33 @@ export function RepositorySettings({ owner, repo }: { owner: string; repo: strin
           </p>
         )}
         {loading && <p className="text-sm text-muted-foreground">Loading settings from GitHub…</p>}
-        {!loading && error && !settings && (
-          <Button
-            variant="outline"
-            className="self-start"
-            onClick={() => {
-              setError(null)
-              setLoading(true)
-              const version = ++requestVersion.current
-              void getRepositorySettings(client.rest, owner, repo)
-                .then((loaded) => {
-                  if (requestVersion.current !== version) return
-                  setSettings(loaded)
-                  setDraft(toDraft(loaded))
-                })
-                .catch((cause: unknown) => {
-                  if (requestVersion.current === version) setError(message(cause))
-                })
-                .finally(() => {
-                  if (requestVersion.current === version) setLoading(false)
-                })
-            }}
-          >
-            Retry
-          </Button>
+        {!loading && currentLoadError && !settings && (
+          <div className="flex flex-col items-start gap-2">
+            <p className="text-sm text-muted-foreground">Could not load repository settings.</p>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setLoadError(null)
+                setLoading(true)
+                const version = ++requestVersion.current
+                void getRepositorySettings(client.rest, owner, repo)
+                  .then((loaded) => {
+                    if (requestVersion.current !== version) return
+                    setSettings(loaded)
+                    setDraft(toDraft(loaded))
+                  })
+                  .catch((cause: unknown) => {
+                    if (requestVersion.current === version)
+                      setLoadError({ repoName, message: message(cause) })
+                  })
+                  .finally(() => {
+                    if (requestVersion.current === version) setLoading(false)
+                  })
+              }}
+            >
+              Retry
+            </Button>
+          </div>
         )}
 
         {draft && (

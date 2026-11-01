@@ -4,10 +4,12 @@ import { TooltipProvider } from "@github-client/ui/components/tooltip"
 import { RouterProvider } from "@tanstack/react-router"
 import { useEffect, useState } from "react"
 import { SessionContext } from "@/app/client"
+import { useErrorToast } from "@/app/errors"
 import { createAppRouter } from "@/app/router"
 import { SIGNED_OUT_KEY, VIEWER_KEY } from "@/app/storage-keys"
 import { startUpdateChecks } from "@/app/updates"
 import { useTheme } from "@/components/theme-provider"
+import { isMacDesktop, WindowChrome } from "@/components/window-chrome"
 import { createPlatform } from "@/platform"
 import { Setup } from "@/screens/setup"
 
@@ -15,7 +17,10 @@ import { Setup } from "@/screens/setup"
 // cannot open the same SQLite collections twice.
 let clientPromise: Promise<GitHubClient> | undefined
 const getClient = () => {
-  clientPromise ??= createPlatform().then((platform) => new GitHubClient(platform))
+  clientPromise ??= createPlatform().then(async (platform) => {
+    const client = new GitHubClient(platform)
+    return client
+  })
   return clientPromise
 }
 
@@ -29,6 +34,10 @@ type State =
 export function Boot() {
   const [state, setState] = useState<State>({ phase: "loading" })
   const { theme } = useTheme()
+  useErrorToast(state.phase === "failed" ? state.error : null, {
+    id: "startup-error",
+    title: "Could not start GitHub-client",
+  })
 
   useEffect(() => startUpdateChecks(), [])
 
@@ -37,13 +46,15 @@ export function Boot() {
     ;(async () => {
       const client = await getClient()
       const allowEnv = localStorage.getItem(SIGNED_OUT_KEY) === null
-      if (!(await client.auth.restore({ allowEnv }))) return { phase: "setup", client } as State
+      const restored = await client.auth.restore({ allowEnv })
+      if (!restored) return { phase: "setup", client } as State
+      const cachedViewer = localStorage.getItem(VIEWER_KEY)
       try {
         const viewer = await client.rest.get<{
           login: string
           name: string | null
           avatar_url: string
-        }>("/user")
+        }>("/user", undefined, {}, cachedViewer ? AbortSignal.timeout(3000) : undefined)
         return ready(client, {
           login: viewer.login,
           name: viewer.name,
@@ -58,8 +69,7 @@ export function Boot() {
           } as State
         }
         // Offline: start from cached data with the last known viewer.
-        const cached = localStorage.getItem(VIEWER_KEY)
-        if (cached) return ready(client, JSON.parse(cached) as Viewer)
+        if (cachedViewer) return ready(client, JSON.parse(cachedViewer) as Viewer)
         throw error
       }
     })()
@@ -70,9 +80,9 @@ export function Boot() {
     }
   }, [])
 
-  return (
-    <TooltipProvider>
-      {state.phase === "loading" && <div className="h-svh" />}
+  const content = (
+    <>
+      {state.phase === "loading" && <div className={isMacDesktop ? "h-full" : "h-svh"} />}
       {state.phase === "failed" && (
         <div className="p-8 text-sm text-destructive">Could not start: {state.error}</div>
       )}
@@ -80,16 +90,35 @@ export function Boot() {
         <Setup
           client={state.client}
           error={state.error}
-          onSignedIn={(viewer) => setState(ready(state.client, viewer))}
+          className={isMacDesktop ? "h-full" : undefined}
+          onSignedIn={(viewer) => {
+            void ready(state.client, viewer)
+              .then(setState)
+              .catch((error) => setState({ phase: "failed", error: String(error) }))
+          }}
         />
       )}
       {state.phase === "ready" && <App client={state.client} viewer={state.viewer} />}
-      <Toaster theme={theme} position="bottom-right" />
+    </>
+  )
+
+  return (
+    <TooltipProvider>
+      {isMacDesktop && state.phase !== "ready" ? (
+        <div className="flex h-svh flex-col overflow-hidden">
+          <WindowChrome />
+          <div className="min-h-0 flex-1">{content}</div>
+        </div>
+      ) : (
+        content
+      )}
+      <Toaster theme={theme} position="bottom-right" expand />
     </TooltipProvider>
   )
 }
 
-function ready(client: GitHubClient, viewer: Viewer): State {
+async function ready(client: GitHubClient, viewer: Viewer): Promise<State> {
+  await client.activateAccount(viewer.login)
   localStorage.removeItem(SIGNED_OUT_KEY)
   localStorage.setItem(VIEWER_KEY, JSON.stringify(viewer))
   client.startSync()

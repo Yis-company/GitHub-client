@@ -54,6 +54,12 @@ export function CommandPalette({
           <CommandEmpty>No results.</CommandEmpty>
           <CommandGroup heading="Inbox">
             <CommandItem
+              value="home dashboard organizations teams"
+              onSelect={() => run(() => navigate({ to: "/" }))}
+            >
+              Home
+            </CommandItem>
+            <CommandItem
               value="inbox active snoozed settled pull requests"
               onSelect={() => run(() => navigate({ to: "/inbox" }))}
             >
@@ -66,7 +72,21 @@ export function CommandPalette({
                 key={g.id}
                 value={`group ${g.name}`}
                 onSelect={() =>
-                  run(() => navigate({ to: "/g/$groupId", params: { groupId: g.id } }))
+                  run(() => {
+                    if (g.kind === "org")
+                      return navigate({
+                        to: "/org/$org",
+                        params: { org: g.org ?? g.name },
+                        search: { tab: "overview" },
+                      })
+                    if (g.kind === "team" && g.org)
+                      return navigate({
+                        to: "/team/$org/$slug",
+                        params: { org: g.org, slug: g.id.slice(g.id.indexOf("/") + 1) },
+                        search: { tab: "overview" },
+                      })
+                    return navigate({ to: "/g/$groupId", params: { groupId: g.id } })
+                  })
                 }
               >
                 {g.name}
@@ -94,6 +114,28 @@ export function CommandPalette({
                   <span className="ml-auto shrink-0 text-xs text-muted-foreground">
                     {p.repo}#{p.number}
                   </span>
+                </CommandItem>
+              )
+            })}
+          </CommandGroup>
+          <CommandGroup heading="Repositories">
+            {repoNames.map((fullName) => {
+              const [owner, repo] = fullName.split("/") as [string, string]
+              return (
+                <CommandItem
+                  key={fullName}
+                  value={`repository code ${fullName}`}
+                  onSelect={() =>
+                    run(() =>
+                      navigate({
+                        to: "/repo/$owner/$repo",
+                        params: { owner, repo },
+                        search: { tab: "code" },
+                      }),
+                    )
+                  }
+                >
+                  {fullName} · Code
                 </CommandItem>
               )
             })}
@@ -131,13 +173,36 @@ export function CommandPalette({
               )
             })}
           </CommandGroup>
-          <CommandGroup heading="Commands">
+          <CommandGroup heading="Theme">
             <CommandItem
-              value="toggle theme dark light"
-              onSelect={() => run(() => setTheme(theme === "dark" ? "light" : "dark"))}
+              value={`use system theme${theme === "system" ? " current" : ""}`}
+              onSelect={() => run(() => setTheme("system"))}
             >
-              Toggle dark mode
+              Use system theme
+              {theme === "system" && (
+                <span className="ml-auto text-xs text-muted-foreground">Current</span>
+              )}
             </CommandItem>
+            <CommandItem
+              value={`use light theme${theme === "light" ? " current" : ""}`}
+              onSelect={() => run(() => setTheme("light"))}
+            >
+              Use light theme
+              {theme === "light" && (
+                <span className="ml-auto text-xs text-muted-foreground">Current</span>
+              )}
+            </CommandItem>
+            <CommandItem
+              value={`use dark theme${theme === "dark" ? " current" : ""}`}
+              onSelect={() => run(() => setTheme("dark"))}
+            >
+              Use dark theme
+              {theme === "dark" && (
+                <span className="ml-auto text-xs text-muted-foreground">Current</span>
+              )}
+            </CommandItem>
+          </CommandGroup>
+          <CommandGroup heading="Commands">
             <CommandItem
               value="refresh groups sync"
               onSelect={() => run(() => void client.refresh("groups"))}
