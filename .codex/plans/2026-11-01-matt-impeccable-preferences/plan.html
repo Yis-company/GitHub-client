@@ -1,0 +1,66 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>GitHub-client setup preferences</title><style>
+:root{color-scheme:light dark;font-family:var(--font-sans,system-ui,sans-serif);color:var(--foreground,light-dark(#20252b,#e8e8ea));line-height:1.6;font-size:16px}
+*{box-sizing:border-box}body{margin:0}main{max-width:960px;margin:0 auto;padding:8px 0 28px}h1{font-size:clamp(1.6rem,5vw,2.15rem);letter-spacing:-.035em;line-height:1.18;margin:12px 0 18px}h2{font-size:1.2rem;line-height:1.35;margin:28px 0 10px}p{margin:10px 0}li{margin:10px 0}ul,ol{padding-left:24px}a{color:var(--info,light-dark(#174baf,#9bbdff));text-underline-offset:3px}code{font-family:var(--font-mono,ui-monospace,monospace);font-size:.88em;overflow-wrap:anywhere}pre{font-size:.9rem;padding:16px;border-radius:var(--radius,8px);background:var(--code-background,light-dark(#f3f4f6,#1d2025));white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.5}pre code{font-size:inherit}details{border-top:1px solid var(--border,light-dark(#d8dde5,#454a52));padding:16px 0;margin:16px 0}summary{font-weight:650;cursor:pointer;overflow-wrap:anywhere;padding:6px 0}summary:focus-visible,a:focus-visible{outline:2px solid var(--ring,#6499ff);outline-offset:4px}table{border-collapse:collapse;width:100%;font-size:.9rem}th,td{text-align:left;vertical-align:top;border-bottom:1px solid var(--border,light-dark(#d8dde5,#454a52));padding:10px 6px;overflow-wrap:anywhere}section{margin-bottom:16px}@media(max-width:480px){h1{font-size:1.7rem}pre{padding:12px}th,td{padding:8px 4px}}
+</style></head><body><main><h1>Apply the confirmed setup preferences</h1>
+<p>Date: 2026-11-01
+Status: Revision draft for approval</p><section><h2>Confirmed choices</h2><p>Yi answered the setup interview: use separate domain contexts per package, keep <code>AGENTS.md</code>, and start future landing/showcase surfaces with an image composition. These choices replace the earlier single-context and unset-default recommendations. The original approval record remains intact.</p></section><section><h2>Smallest useful change</h2><p>Update the agent/domain pointers, add a root glossary map with package responsibilities and lazy target paths, and store <code>"buildPath": "comp"</code> in the selected desktop app's <code>.impeccable/config.json</code>. App screens and documents remain code-first under Impeccable's workflow; this setting governs landing/showcase surfaces only.</p>
+<p>Keep glossary/ADR content lazy. Do not invent domain terms or create empty package documents. Existing Linear routing, product facts, architecture, visual authority and live-picker settings remain intact. No application code or external writes.</p></section><details><summary>Repository evidence and scope</summary><p>The bound repository is GitHub-client. Current <code>AGENTS.md</code> and <code>docs/agents/domain.md</code> still specify one root context. There is no glossary map or existing build-default config to merge. The approved init resolved <code>apps/desktop</code> as Impeccable's project root. Its init workflow stores the chosen default in <code>.impeccable/config.json</code>, separately from PRODUCT.md. There is no <code>.codegraph/</code> directory. The existing 49 dirty files were captured byte for byte before this revision.</p></details><section><h2>Sequence, ownership and acceptance</h2><ol>
+<li><strong>Yi reviews the exact drafts below.</strong> Codex renders this revision with <code>html-plan</code> and runs the required Plannotator gate. A changed or dismissed review does not authorize edits; an approved review permits this revision.</li>
+<li><strong>Codex applies only the four reviewed files.</strong> Dependency: approval. Retain the existing <code>AGENTS.md</code> content around the changed domain pointer and preserve the domain authority references.</li>
+<li><strong>Codex verifies the result.</strong> Check the four files against the approved drafts, validate the JSON value, verify all context directories exist, and check that the glossary/ADR paths remain lazy. Confirm product/tracker/live settings and all unrelated dirty bytes remain intact. Run whitespace/diff checks. Application tests are unnecessary for this documentation/configuration revision.</li>
+</ol></section><h2>Exact proposed files</h2><details><summary>AGENTS.md</summary><pre><code class="language-markdown"># GitHub-client agent guidance
+
+Keep changes small, readable and within the requested goal. Fix root causes. Do not introduce hashing without Yi's decision. Questions are read-only. Preserve unrelated dirty work; do not kill dev servers, wipe directories or create worktrees to bypass history/conflicts. Stop and ask if history or conflicts block the task.
+
+For substantive planning, investigate first, write `plan.md` and render `plan.html` with `html-plan` under `.codex/plans/&lt;YYYY-MM-DD&gt;-&lt;slug&gt;/`. Review with `plannotator annotate &lt;plan.html&gt; --gate --json --require-approval --result-file &lt;review.json&gt;`. Implement only after approval. Use CodeGraph before source exploration when `.codegraph/` exists.
+
+## Agent skills
+
+### Issue tracker
+
+Use the existing Linear Github client team and appropriate project. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Use separate domain documentation contexts for `apps/desktop`, `packages/core` and `packages/ui`, indexed by `GLOSSARY-MAP.md`. Create glossary and ADR content lazily. See `docs/agents/domain.md`.
+
+### Product context
+
+For the desktop interface, read `apps/desktop/PRODUCT.md`. `packages/ui` supplies its shared components. Existing styles/components and any future applicable `DESIGN.md` remain visual authority; product initialization does not authorize redesign.
+</code></pre></details><details><summary>docs/agents/domain.md</summary><pre><code class="language-markdown"># Domain docs
+
+## Layout and consumer rules
+
+Use separate domain documentation contexts for `apps/desktop`, `packages/core` and `packages/ui`, as selected by Yi. Root `GLOSSARY-MAP.md` indexes them; package documentation boundaries do not change the application architecture.
+
+- Read root `GLOSSARY-MAP.md`, then the relevant package glossary and ADRs before exploring an area. Read root `docs/adr/` for cross-package decisions when present.
+- For work spanning packages, read each affected context. Shared core terminology remains consistent in desktop and UI consumers; do not invent different meanings for the same GitHub concept.
+- Glossaries live at `&lt;package&gt;/GLOSSARY.md`; package decisions live at `&lt;package&gt;/docs/adr/`. The map lists the exact paths and responsibilities.
+- When a glossary or ADR directory is absent, proceed silently. Do not create empty files or directories. `domain-modeling` records resolved terms and decisions lazily in the applicable context.
+- Use the applicable glossary's vocabulary in issues, code and tests. Identify conflicting definitions or ADRs explicitly rather than silently overriding them.
+
+## Existing authorities
+
+- Product: `apps/desktop/PRODUCT.md`.
+- Original approved product/architecture: `.claude/plans/2026-09-25-github-client/plan.md`.
+- Approved revised data/platform implementation: `.claude/plans/2026-09-25-v1-implementation/plan.md` (TanStack DB/SQLite persistence, injected platform services, small Rust shell, Bun/Turborepo).
+- Later approved inbox/navigation/settings decisions: `.codex/plans/2026-09-26-pr-inbox-navigation/plan.md`.
+
+Preserve later scoped decisions over earlier proposals. These plans are decision evidence, not proof of current runtime behavior or CI. Inspect current source/tests before asserting implementation status. `packages/core` stays free of DOM/native dependencies; the documentation contexts do not introduce new runtime layers or change package dependencies.
+</code></pre></details><details><summary>GLOSSARY-MAP.md</summary><pre><code class="language-markdown"># Glossary map
+
+Yi selected one documentation context per workspace package. Read only the contexts relevant to the task; work across packages needs each affected context. This map does not introduce separate products, runtime boundaries or new architecture layers.
+
+| Context | Responsibility | Glossary | Package ADRs |
+| --- | --- | --- | --- |
+| `apps/desktop` | Desktop workflows, navigation, local interaction state and platform integration | `apps/desktop/GLOSSARY.md` | `apps/desktop/docs/adr/` |
+| `packages/core` | Shared GitHub/domain types, API clients, collections, synchronization and actions | `packages/core/GLOSSARY.md` | `packages/core/docs/adr/` |
+| `packages/ui` | Shared UI primitives, component vocabulary and reusable interaction contracts | `packages/ui/GLOSSARY.md` | `packages/ui/docs/adr/` |
+
+Glossaries and ADR directories are created only when terms or decisions are resolved. Missing paths are intentional; proceed without scaffolding empty documents. Cross-package decisions belong in root `docs/adr/` when needed. Reuse core definitions in consuming packages instead of duplicating or redefining them.
+
+See `docs/agents/domain.md` for consumer rules and existing decision authorities. Desktop product context remains in `apps/desktop/PRODUCT.md`.
+</code></pre></details><details><summary>apps/desktop/.impeccable/config.json</summary><pre><code class="language-json">{
+  &quot;buildPath&quot;: &quot;comp&quot;
+}
+</code></pre></details><section><h2>Approval rule</h2><p>The project <code>AGENTS.md</code> requires a rendered plan and <code>plannotator annotate &lt;plan.html&gt; --gate --json --require-approval --result-file &lt;review.json&gt;</code> before substantive setup changes. The Matt setup skill requires draft confirmation before writing configuration. This revision contains the exact implementation of the newly confirmed choices, without reopening the interview.</p></section></main></body></html>

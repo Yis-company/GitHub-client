@@ -1,0 +1,163 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>GitHub-client · Matt and Impeccable setup</title><style>
+:root{color-scheme:light dark;font-family:var(--font-sans,system-ui,sans-serif);color:var(--foreground,light-dark(#20252b,#e8e8ea));line-height:1.6;font-size:16px}
+*{box-sizing:border-box}body{margin:0}main{max-width:960px;margin:0 auto;padding:8px 0 28px}h1{font-size:clamp(1.6rem,5vw,2.15rem);letter-spacing:-.035em;line-height:1.18;margin:12px 0 18px}h2{font-size:1.2rem;line-height:1.35;margin:28px 0 10px}p{margin:10px 0}li{margin:10px 0}ul,ol{padding-left:24px}a{color:var(--info,light-dark(#174baf,#9bbdff));text-underline-offset:3px}code{font-family:var(--font-mono,ui-monospace,monospace);font-size:.88em;overflow-wrap:anywhere}pre{font-size:.9rem;padding:16px;border-radius:var(--radius,8px);background:var(--code-background,light-dark(#f3f4f6,#1d2025));white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.5}pre code{font-size:inherit}details{border-top:1px solid var(--border,light-dark(#d8dde5,#454a52));padding:16px 0;margin:16px 0}summary{font-weight:650;cursor:pointer;overflow-wrap:anywhere;padding:6px 0}summary:focus-visible,a:focus-visible{outline:2px solid var(--ring,#6499ff);outline-offset:4px}table{border-collapse:collapse;width:100%;font-size:.9rem}th,td{text-align:left;vertical-align:top;border-bottom:1px solid var(--border,light-dark(#d8dde5,#454a52));padding:10px 6px;overflow-wrap:anywhere}section{margin-bottom:16px}@media(max-width:480px){h1{font-size:1.7rem}pre{padding:12px}th,td{padding:8px 4px}}
+</style></head><body><main><h1>Initialize Matt and Impeccable</h1>
+<p>Date: 2026-11-01
+Project: <code>/Users/yitam/Documents/code/ybtam/GitHub-client</code>
+Status: Draft; setup files require the interview choices and Plannotator approval below.</p><section><h2>Outcome and scope</h2><p>Add useful local engineering guidance and durable product context for the owned desktop app. Retain the existing tracker, architecture, product behavior and visual implementation. No application code, redesign, migrations, deployments, credentials, external writes, commits or pushes.</p>
+<p>Yi confirms configuration and approves this draft. Codex writes the approved files and verifies their scope and consistency.</p></section><section><h2>Confirmed decisions</h2><ul>
+<li>Keep Linear as the issue tracker. Live verification resolves the old project slug to <strong>GitHub-client v1 build / P-GIT-100</strong>, in <strong>Github client / GIT</strong>. The build project is completed; existing follow-ups have their own projects. Old <code>SID-68</code> resolves to <code>GIT-27</code> in v1 release.</li>
+<li>Primary user: Yi, working daily with PRs, reviews and Actions. Retain the approved fast, keyboard-first, cached desktop product direction.</li>
+<li>Impeccable platform: <code>web</code>, describing the shared React interface inside Tauri. Desktop native services remain behind platform adapters. Hosted web and mobile are future scope.</li>
+<li>Target: <code>apps/desktop</code>. <code>packages/ui</code> is the shared component library, not another product requiring its own product record.</li>
+</ul></section><section><h2>Remaining choices proposed for approval</h2><ol>
+<li>Domain layout: recommend one root glossary and ADR directory, created lazily. The workspace packages share one product domain; package boundaries do not require separate domain authorities.</li>
+<li>Instruction file: neither root <code>AGENTS.md</code> nor <code>CLAUDE.md</code> exists. Recommend creating <code>AGENTS.md</code>; the Matt skill requires Yi's selection.</li>
+<li>Optional landing/showcase build default: recommend leaving it unset. App screens and documents are code-first either way. Only store <code>buildPath</code> if Yi explicitly chooses a value.</li>
+</ol>
+<p>The drafts below use those recommendations. Yi may answer the pending interview questions or confirm these exact choices by approving this complete draft. Any different choice requires updating this draft before review approval. Silence confirms nothing.</p></section><details><summary>Repository evidence and verification limits</summary><ul>
+<li>Correct repository and remote: <code>https://github.com/Yis-company/GitHub-client</code>. HEAD at inspection: <code>94528f1cad80</code>. No unmerged index entries, merge or rebase in progress. No <code>.codegraph/</code>; CodeGraph skipped.</li>
+<li>Existing dirty state: <code>.changeset/config.json</code> and untracked skill folders under <code>.agents</code>, <code>.claude</code>, <code>.hermes</code>, <code>.trae</code>. Preserve all 41 existing dirty files byte for byte. No skill installation or replacement is needed for this setup.</li>
+<li>No existing root agent instructions, <code>docs/agents</code>, glossary/map, ADRs, <code>PRODUCT.md</code>, <code>DESIGN.md</code>, or Impeccable config were found. Installed skills alone do not supply their project context. <code>triage</code> is absent locally and from available shared skills: omit its configuration and remote labels.</li>
+<li>Product and architecture authority: approved <code>.claude/plans/2026-09-25-github-client/plan.md</code>; approved revised implementation plan in <code>.claude/plans/2026-09-25-v1-implementation/plan.md</code>; approved inbox/navigation plan in <code>.codex/plans/2026-09-26-pr-inbox-navigation/plan.md</code>. Preserve later scoped decisions over earlier proposals; do not treat historical verification as current runtime proof.</li>
+<li>Current source: <code>README.md</code>, workspace manifests, desktop routes, platform adapters, shortcut handling, theme provider, app CSS and shared UI tokens. Native HTTP/keychain/SQLite are injected; core remains independent of DOM/native APIs. Release workflow defines Linux, macOS and Windows builds; this inspection does not prove runtime acceptance on those OSes.</li>
+<li>Impeccable context at repo root detected <code>desktop</code> and <code>ui</code>, both missing product/design files. Re-running from the selected desktop child resolved <code>apps/desktop</code> as the project root and found incumbent UI. Its current styles/components remain visual authority.</li>
+<li>Browser development exists at Vite port 5173 with HMR and <code>apps/desktop/index.html</code> as the entry. <code>impeccable detect-csp</code> from that app returned <code>shape: null</code>, <code>signals: []</code>. A live-picker configuration can be written without injection, a running server or a CSP edit.</li>
+<li>Linear read-only verification on 2026-11-01 found the current GIT team and five project URLs recorded below. The advertised <code>get_agent_context</code> tool returned “Tool get_agent_context not found”; current project/issue reads succeeded. No external mutation occurred.</li>
+</ul></details><section><h2>Sequence and acceptance</h2><ol>
+<li><strong>Yi: settle the interview choices.</strong> Dependency: repository investigation, already complete. Update this plan and drafts if the choices differ.</li>
+<li><strong>Yi: review the complete draft.</strong> Codex renders this Markdown to responsive <code>plan.html</code> with <code>html-plan</code>, checks wide/narrow rendering, then runs <code>plannotator annotate &lt;plan.html&gt; --gate --json --require-approval --result-file &lt;review.json&gt;</code>. Feedback requires revision and another review. Dismissal is not approval.</li>
+<li><strong>Codex: write the approved setup.</strong> Dependency: approved review. Create only the files in the next section, accounting for any newly existing files before writing. Keep original decisions and dirty files intact.</li>
+<li><strong>Codex: verify and report.</strong> Check local Markdown links, JSON shape, the exact platform/schema marker, one Agent skills block and absence of triage configuration. Compare all 41 original dirty files byte for byte, review <code>git diff --check</code> and the final changed-file inventory. Documentation/configuration checks are appropriate; app tests, native launch and remote CI are not needed for this scope. State their absence plainly.</li>
+</ol></section><h2>Exact proposed files</h2><p>Review every draft below. These are proposed contents; no setup file has been written.</p><details class="draft"><summary>AGENTS.md</summary><pre><code class="language-markdown"># GitHub-client agent guidance
+
+Keep changes small, readable and within the requested goal. Fix root causes. Do not introduce hashing without Yi's decision. Questions are read-only. Preserve unrelated dirty work; do not kill dev servers, wipe directories or create worktrees to bypass history/conflicts. Stop and ask if history or conflicts block the task.
+
+For substantive planning, investigate first, write `plan.md` and render `plan.html` with `html-plan` under `.codex/plans/&lt;YYYY-MM-DD&gt;-&lt;slug&gt;/`. Review with `plannotator annotate &lt;plan.html&gt; --gate --json --require-approval --result-file &lt;review.json&gt;`. Implement only after approval. Use CodeGraph before source exploration when `.codegraph/` exists.
+
+## Agent skills
+
+### Issue tracker
+
+Use the existing Linear Github client team and appropriate project. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Use one root domain context; create glossary and ADRs only as real terms and decisions are resolved. See `docs/agents/domain.md`.
+
+### Product context
+
+For the desktop interface, read `apps/desktop/PRODUCT.md`. `packages/ui` supplies its shared components. Existing styles/components and any future applicable `DESIGN.md` remain visual authority; product initialization does not authorize redesign.
+</code></pre></details><details class="draft"><summary>docs/agents/issue-tracker.md</summary><pre><code class="language-markdown"># Issue tracker: Linear
+
+GitHub-client work lives in the existing Linear **Github client** team (`GIT`), workspace `abrian`. GitHub is the source/PR host; do not create GitHub issues as a substitute for Linear tickets.
+
+## Existing projects
+
+Verified read-only on 2026-11-01. Resolve current project metadata before a write; this table is routing guidance, not current delivery evidence.
+
+| Scope | Project |
+| --- | --- |
+| Original v1 build | [P-GIT-100: GitHub-client v1 build](https://linear.app/abrian/project/github-client-v1-build-b4abc69a1ab2) |
+| Desktop verification, installers, signing | [P-GIT-116: GitHub-client v1 release](https://linear.app/abrian/project/github-client-v1-release-6e08e6f12c87) |
+| Existing v1 limitations | [P-GIT-117: GitHub-client v1 polish](https://linear.app/abrian/project/github-client-v1-polish-5c25e96ecabe) |
+| Local repositories and v2 leftovers | [P-GIT-118: GitHub-client v2 local repositories](https://linear.app/abrian/project/github-client-v2-local-repositories-6ba318c8fbc1) |
+| Server, hosted web, mobile | [P-GIT-119: GitHub-client Phase 2: server, web and mobile](https://linear.app/abrian/project/github-client-phase-2-server-web-and-mobile-e769c8e6b123) |
+
+The v1 build project was completed at verification. Route follow-ups by scope; do not default all new work into that project. Older plans use Side Projects / SID identifiers. Resolve those through Linear and retain historical references; for example, `SID-68` now resolves to `GIT-27` in v1 release.
+
+## Skill operations
+
+- **Fetch the relevant ticket:** read the supplied Linear issue key, UUID or URL through the connected Linear tools. Read its description, acceptance criteria, related work and dependencies before proposing changes.
+- **Publish to the issue tracker:** when requested, create a Linear issue in the existing GIT team and matching project. Search for duplicates first. Reuse existing labels/statuses; do not invent a workflow or create labels as part of setup.
+- **Specs and implementation tickets:** keep the spec and its scoped child work in Linear; retain source, plan and related-issue links. Preserve existing ownership and dependency relationships. Ask when project routing is materially ambiguous.
+- **Wayfinding, when requested:** use a parent Linear issue as the map, related child issues as tickets, and existing issue dependencies for blockers. Reuse project workflow; do not scaffold labels or a board preemptively.
+- **Read versus write:** an inspection or question is read-only. Tracker configuration grants no standing permission to create, comment, claim, relabel, close or otherwise change external issues. If the connector is unavailable, report the limit instead of silently switching trackers.
+
+PRs remain code-review artifacts, not an incoming feature-request triage queue.
+</code></pre></details><details class="draft"><summary>docs/agents/domain.md</summary><pre><code class="language-markdown"># Domain docs
+
+## Layout and consumer rules
+
+Use one domain context across `apps/desktop`, `packages/core` and `packages/ui`.
+
+- Read root `GLOSSARY.md` when present and relevant ADRs in `docs/adr/` before exploring an area.
+- If a future approved split introduces root `GLOSSARY-MAP.md`, follow its relevant context pointers instead.
+- When those files are absent, proceed silently. Do not create empty glossary/ADR scaffolding; `domain-modeling` records actual resolved terminology and decisions lazily.
+- Use the glossary's vocabulary in issues, code and tests. If a proposed change contradicts an ADR, identify the conflict and seek the scoped decision rather than silently overriding it.
+
+## Existing authorities
+
+- Product: `apps/desktop/PRODUCT.md`.
+- Original approved product/architecture: `.claude/plans/2026-09-25-github-client/plan.md`.
+- Approved revised data/platform implementation: `.claude/plans/2026-09-25-v1-implementation/plan.md` (TanStack DB/SQLite persistence, injected platform services, small Rust shell, Bun/Turborepo).
+- Later approved inbox/navigation/settings decisions: `.codex/plans/2026-09-26-pr-inbox-navigation/plan.md`.
+
+Preserve later scoped decisions over earlier proposals. These plans are decision evidence, not proof of current runtime behavior or CI. Inspect current source/tests before asserting implementation status. `packages/core` stays free of DOM/native dependencies; package boundaries alone do not justify separate glossaries or architecture layers.
+</code></pre></details><details class="draft"><summary>apps/desktop/PRODUCT.md</summary><pre><code class="language-markdown"># GitHub-client
+
+&lt;!-- impeccable:product-schema 1 --&gt;
+
+## Platform
+
+web
+
+## Users
+
+Yi is the primary user: a senior full-stack developer who reviews more code than he writes and works with pull requests, reviews and GitHub Actions daily.
+
+## Product Purpose
+
+A fast, keyboard-first desktop client that replaces routine GitHub website use for PRs, diff review and Actions. Success means less navigation latency and fewer interruptions while finding work, reviewing changes and understanding CI.
+
+## Operating Context
+
+The owned product is `apps/desktop`: one React interface inside a Tauri shell. Native services are supplied by platform adapters; this platform classification does not imply a hosted-web product or a separate native design language per OS. Linux, macOS and Windows builds are defined in the release workflow; runtime acceptance must be verified separately.
+
+The same UI can run in browser development mode (`bun --cwd apps/desktop dev`, port 5173). That mode uses tab-scoped token storage and browser SQLite/OPFS, with an in-memory fallback; it has different capabilities from Tauri, including CORS limits on Actions logs.
+
+## Capabilities and Constraints
+
+- PR inbox and organization/team/starred browsing, PR detail, diff review with inline comments and suggestions, review/merge actions, Actions runs/jobs/steps/logs and workflow controls, command palette and keyboard shortcuts.
+- Inbox Active/Snoozed/Settled state is local and account-scoped. Settling does not close or merge a GitHub PR. Failures remain visible across local states; displaying them does not cancel snooze.
+- GitHub repository settings are bounded by supported fields and admin capability; saves require server confirmation. Preserve permission/error handling and truthful freshness/status feedback.
+- Screens consume TanStack DB collections with SQLite persistence and background synchronization. Cached data is not proof of current remote state. Core GitHub/domain logic stays independent of DOM/native services.
+- Desktop authentication uses a classic PAT, environment token or GitHub CLI import, with OS keychain storage. Browser-development storage is a separate convenience, not the desktop credential model.
+- API diff truncation and log-availability limits remain constraints. Do not promise complete PR coverage or true live step-log streaming without evidence.
+- Local repositories, Git Town, agent launch, hosted service and mobile are future scope requiring separate approval. A full IDE, a full git client and embedded agent sessions are outside the approved product direction.
+
+## Brand Commitments
+
+`GitHub-client` and `@github-client/*` are the existing working names. Naming was reserved for separate review in the approved product plan; setup does not settle a public brand or rename assets.
+
+## Evidence on Hand
+
+- Repository `README.md`, current desktop routes/platform adapters, shared `packages/ui`, and core domain/actions/sync code establish the implementation context; they do not prove live-operation acceptance.
+- Approved product/architecture and revised implementation plans: `.claude/plans/2026-09-25-github-client/plan.md` and `.claude/plans/2026-09-25-v1-implementation/plan.md` from the repo root.
+- Later approved inbox/navigation/settings plan: `.codex/plans/2026-09-26-pr-inbox-navigation/plan.md` from the repo root.
+- Existing UI components, styles and assets remain visual authority. This record introduces no visual direction, palette, component rules or redesign authorization.
+
+## Product Principles
+
+1. Keep daily review work fast and keyboard-efficient, with useful cached content while refresh runs in the background.
+2. Keep local organization distinct from GitHub mutations, and make permissions, freshness and action outcomes truthful.
+3. Keep product and architecture complexity low; reuse the shared core and platform seams, and scope future capabilities separately.
+
+## Accessibility &amp; Inclusion
+
+Keyboard operation is a confirmed product requirement. Preserve focus and navigation through lists, panes, disclosures and actions. Failure/status meaning must remain understandable beyond color. No additional product-specific conformance target has been confirmed.
+</code></pre></details><details class="draft"><summary>apps/desktop/.impeccable/live/config.json</summary><pre><code class="language-json">{
+  &quot;files&quot;: [&quot;index.html&quot;],
+  &quot;insertBefore&quot;: &quot;&lt;/body&gt;&quot;,
+  &quot;commentSyntax&quot;: &quot;html&quot;,
+  &quot;cspChecked&quot;: true
+}
+</code></pre>
+<p>This is configuration for optional future browser iteration. The CSP check above supports <code>cspChecked</code>; setup does not run live mode, start a dev server, inject scripts, change HTML/CSP or enable hooks. It does not validate native runtime behavior.</p></details><section><h2>Intentionally omitted or deferred</h2><ul>
+<li>No triage labels/configuration: <code>triage</code> is not installed.</li>
+<li>No empty glossary, ADRs, domain maps or new architecture decisions.</li>
+<li>No <code>DESIGN.md</code>: Impeccable init captures product truth only; incumbent UI authority remains intact.</li>
+<li>No second product record for the shared UI package or a future hosted/mobile app.</li>
+<li>No image build default unless Yi explicitly chooses one. The desktop app uses code-first; an unset landing/showcase default remains unset.</li>
+<li>No skill bundle installation, hooks, app changes or external tracker changes.</li>
+</ul></section><section><h2>Approval rule</h2><p>The Matt skill says “Show the user a draft” and “Let them edit before writing.” Impeccable init requires “one real answer or approval round before writing a new PRODUCT.md.” The project rule requires the HTML plan gate before implementation. Interview responses confirm facts; only the subsequent approved plan review authorizes writing these setup files.</p></section></main></body></html>
