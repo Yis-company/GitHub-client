@@ -3,12 +3,15 @@
   "version": "0.0.1",
   "private": true,
   "scripts": {
-    "build": "turbo build",
+    "build": "node scripts/turbo.mjs build",
     "dev": "turbo dev",
     "desktop:dev": "bun --cwd apps/desktop tauri dev",
     "desktop:build": "bun --cwd apps/desktop tauri build",
-    "typecheck": "turbo typecheck",
-    "test": "turbo test",
+    "typecheck": "node scripts/turbo.mjs typecheck",
+    "test": "node --test scripts/*.test.mjs && node scripts/turbo.mjs test",
+    "check:push": "bun run lint && bun run typecheck && bun run test",
+    "prepare": "node scripts/install-hooks.mjs",
+    "hooks:install": "node scripts/install-hooks.mjs",
     "lint": "biome check .",
     "format": "biome check --write ."
   },

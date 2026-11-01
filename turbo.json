@@ -1,19 +1,33 @@
 {
   "$schema": "https://turbo.build/schema.json",
   "ui": "stream",
+  "envMode": "strict",
+  "globalDependencies": ["tsconfig.json", "patches/**", "scripts/turbo.mjs"],
+  "globalEnv": ["GITHUB_CLIENT_CACHE_RUNTIME", "NODE_ENV", "CI"],
+  "remoteCache": {
+    "apiUrl": "https://turbo-cache.yitam.dev",
+    "teamSlug": "github-client"
+  },
   "tasks": {
     "build": {
+      "passThroughEnv": ["!TURBO_TOKEN"],
       "dependsOn": ["^build"],
       "inputs": ["$TURBO_DEFAULT$", ".env*"],
+      "env": ["VITE_*"],
       "outputs": ["dist/**"]
     },
     "typecheck": {
-      "dependsOn": ["^typecheck"]
+      "passThroughEnv": ["!TURBO_TOKEN"],
+      "dependsOn": ["^typecheck"],
+      "outputs": []
     },
     "test": {
-      "dependsOn": ["^typecheck"]
+      "passThroughEnv": ["!TURBO_TOKEN"],
+      "dependsOn": ["^typecheck"],
+      "outputs": []
     },
     "dev": {
+      "passThroughEnv": ["!TURBO_TOKEN"],
       "cache": false,
       "persistent": true
     }
