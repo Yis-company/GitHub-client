@@ -224,7 +224,7 @@ export async function fakeGitHub(
                 title: options.pullTitle ?? pullNode.title,
                 html_url: pullNode.url,
                 user: { login: "hubot", avatar_url: "" },
-                draft: false,
+                draft: options.draft ?? false,
                 created_at: pullNode.createdAt,
                 updated_at: pullNode.updatedAt,
                 head: { ref: "fast-diff", sha: options.headOid ?? "abc123" },
@@ -351,6 +351,7 @@ export async function fakeGitHub(
               pageInfo: { hasNextPage: false, endCursor: null },
               nodes: Array.from({ length: options.pullCount ?? 1 }, (_, index) => ({
                 ...pullNode,
+                isDraft: options.draft ?? pullNode.isDraft,
                 id: index === 0 ? "PR_1" : `PR_${index + 1}`,
                 updatedAt: options.pullUpdatedAt?.[`PR_${index + 1}`] ?? pullNode.updatedAt,
                 number: 7 + index,
