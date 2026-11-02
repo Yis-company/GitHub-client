@@ -10,10 +10,19 @@ export function tempDatabase() {
   const opened: Database.Database[] = []
   return {
     file,
-    open() {
-      const database = new Database(file)
+    open(onStatement?: (sql: string) => void) {
+      const database = new Database(file, {
+        verbose: onStatement ? (sql) => onStatement(String(sql)) : undefined,
+      })
       opened.push(database)
       return createNodeSQLitePersistence({ database })
+    },
+    tableName(collectionId: string) {
+      return (
+        opened[0]!
+          .prepare("SELECT table_name FROM collection_registry WHERE collection_id = ?")
+          .get(collectionId) as { table_name: string }
+      ).table_name
     },
     close() {
       for (const database of opened.splice(0)) database.close()

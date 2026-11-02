@@ -21,7 +21,7 @@ import {
 import type { NormalizedDatabase } from "./normalized"
 import {
   type CanonicalPullInput,
-  ingestPullRequest,
+  ingestPullRequests,
   type PullCollections,
   readPullSummary,
 } from "./pulls"
@@ -488,12 +488,12 @@ async function ingest(
   } else if (key.kind === "pulls") {
     const repository = await repositoryForRoute(db, key.owner, key.repo)
     for (const [index, page] of (data.pageData ?? []).entries()) {
-      const ids: string[] = []
-      let observedAt: string | undefined
-      for (const raw of page.items as PullSummary[]) {
-        observedAt ??= raw.inboxObservedAt
-        ids.push(await ingestPullRequest(db, toPullInput(key.owner, repository.key, raw)))
-      }
+      const pulls = page.items as PullSummary[]
+      const ids = await ingestPullRequests(
+        db,
+        pulls.map((raw) => toPullInput(key.owner, repository.key, raw)),
+      )
+      const observedAt = pulls.find((raw) => raw.inboxObservedAt !== undefined)?.inboxObservedAt
       addPage(index, ids, page.hasMore, observedAt)
     }
   } else if (key.kind === "branches") {
