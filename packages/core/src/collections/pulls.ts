@@ -233,13 +233,11 @@ export function findPullByRoute(
     : undefined
 }
 
-/** Resolves a local preference or draft reference, creating a sparse parent when needed. */
-export async function ensurePullIdentity(
+function resolvePullIdentity(
   db: NormalizedDatabase,
   input: PullIdentityInput,
-): Promise<string> {
-  const table = db.table<CanonicalPullRequest>("pullRequests")
-  const rows = db.rows(table)
+  rows: CanonicalPullRequest[],
+): CanonicalPullRequest {
   const repository = input.repo ? findRepository(db, input.repo) : undefined
   const existing =
     (input.nodeId && rows.find((row) => row.nodeId === input.nodeId)) ??
@@ -251,110 +249,148 @@ export async function ensurePullIdentity(
             (!input.nodeId || !row.nodeId || row.nodeId === input.nodeId),
         )
       : undefined)
-  if (existing) return existing.key
+  if (existing) return existing
   const key = db.key(
     "pull",
     input.nodeId ?? (repository && input.number !== undefined ? repository.key : "unknown"),
     input.number ?? "unknown",
   )
-  await table.upsert([
-    {
-      key,
-      scope: db.scope,
-      id: key,
-      nodeId: input.nodeId,
-      repositoryId: repository?.key,
-      number: input.number ?? 0,
-    },
-  ])
-  return key
+  return {
+    key,
+    scope: db.scope,
+    id: key,
+    nodeId: input.nodeId,
+    repositoryId: repository?.key,
+    number: input.number ?? 0,
+  }
+}
+
+/** Resolves a local preference or draft reference, creating a sparse parent when needed. */
+export async function ensurePullIdentity(
+  db: NormalizedDatabase,
+  input: PullIdentityInput,
+): Promise<string> {
+  const table = db.table<CanonicalPullRequest>("pullRequests")
+  const row = resolvePullIdentity(db, input, db.rows(table))
+  if (!table.collection.has(row.key)) await table.upsert([row])
+  return row.key
 }
 
 export async function ingestPullRequest(
   db: NormalizedDatabase,
   input: CanonicalPullInput,
 ): Promise<string> {
-  const id = await ensurePullIdentity(db, {
-    nodeId: input.nodeId,
-    number: input.number,
-    repo: readRepository(db, input.repositoryId)?.fullName,
-  })
+  return (await ingestPullRequests(db, [input]))[0]!
+}
+
+/** Persists final scalar parents once, retaining input order for identities and edges. */
+export async function ingestPullRequests(
+  db: NormalizedDatabase,
+  inputs: CanonicalPullInput[],
+): Promise<string[]> {
+  if (!inputs.length) return []
   const table = db.table<CanonicalPullRequest>("pullRequests")
-  const previous = findPull(db, id)!
-  const {
-    source: _source,
-    observedAt: _observedAt,
-    author: _author,
-    labels: _labels,
-    labelsComplete: _labelsComplete,
-    reviewRequests: _reviewRequests,
-    reviewRequestTargets: _reviewRequestTargets,
-    reviewRequestsComplete: _reviewRequestsComplete,
-    ...scalarInput
-  } = input
-  const stale =
-    input.observedAt !== undefined &&
-    previous.scalarObservedAt !== undefined &&
-    input.observedAt < previous.scalarObservedAt
-  const authorId = stale
-    ? previous.authorId
-    : input.author === null
-      ? null
-      : input.author
-        ? await ensureActor(db, {
-            id: input.author.id,
-            login: input.author.login,
-            avatarUrl: input.author.avatarUrl,
-          })
-        : previous.authorId
-  const merged: CanonicalPullRequest = {
-    ...previous,
-    ...defined(
-      stale ? { repositoryId: scalarInput.repositoryId, number: scalarInput.number } : scalarInput,
-    ),
-    key: id,
-    scope: db.scope,
-    id,
-    nodeId: input.nodeId ?? previous.nodeId,
-    repositoryId: input.repositoryId || previous.repositoryId,
-    number: input.number,
-    authorId,
-    labelsComplete: stale
-      ? previous.labelsComplete
-      : (input.labelsComplete ?? previous.labelsComplete),
-    reviewRequestsComplete: stale
-      ? previous.reviewRequestsComplete
-      : (input.reviewRequestsComplete ?? previous.reviewRequestsComplete),
-  }
-  if (input.state !== undefined) {
-    const observedAt = input.stateObservedAt ?? input.observedAt ?? new Date().toISOString()
-    const older = previous.stateObservedAt !== undefined && observedAt < previous.stateObservedAt
-    if (older || (previous.state === "MERGED" && input.state !== "MERGED")) {
-      merged.state = previous.state
-      merged.stateObservedAt = previous.stateObservedAt
-    } else {
-      merged.state = input.state
-      merged.stateObservedAt = observedAt
+  const staged = new Map(db.rows(table).map((row) => [row.key, row]))
+  const touched = new Set<string>()
+  const ids: string[] = []
+  const writeEdges: Array<() => Promise<void>> = []
+  for (const input of inputs) {
+    const previous = resolvePullIdentity(
+      db,
+      {
+        nodeId: input.nodeId,
+        number: input.number,
+        repo: readRepository(db, input.repositoryId)?.fullName,
+      },
+      [...staged.values()],
+    )
+    const id = previous.key
+    const {
+      source: _source,
+      observedAt: _observedAt,
+      author: _author,
+      labels: _labels,
+      labelsComplete: _labelsComplete,
+      reviewRequests: _reviewRequests,
+      reviewRequestTargets: _reviewRequestTargets,
+      reviewRequestsComplete: _reviewRequestsComplete,
+      ...scalarInput
+    } = input
+    const stale =
+      input.observedAt !== undefined &&
+      previous.scalarObservedAt !== undefined &&
+      input.observedAt < previous.scalarObservedAt
+    const authorId = stale
+      ? previous.authorId
+      : input.author === null
+        ? null
+        : input.author
+          ? await ensureActor(db, {
+              id: input.author.id,
+              login: input.author.login,
+              avatarUrl: input.author.avatarUrl,
+            })
+          : previous.authorId
+    const merged: CanonicalPullRequest = {
+      ...previous,
+      ...defined(
+        stale
+          ? { repositoryId: scalarInput.repositoryId, number: scalarInput.number }
+          : scalarInput,
+      ),
+      key: id,
+      scope: db.scope,
+      id,
+      nodeId: input.nodeId ?? previous.nodeId,
+      repositoryId: input.repositoryId || previous.repositoryId,
+      number: input.number,
+      authorId,
+      labelsComplete: stale
+        ? previous.labelsComplete
+        : (input.labelsComplete ?? previous.labelsComplete),
+      reviewRequestsComplete: stale
+        ? previous.reviewRequestsComplete
+        : (input.reviewRequestsComplete ?? previous.reviewRequestsComplete),
+    }
+    if (input.state !== undefined) {
+      const observedAt = input.stateObservedAt ?? input.observedAt ?? new Date().toISOString()
+      const older = previous.stateObservedAt !== undefined && observedAt < previous.stateObservedAt
+      if (older || (previous.state === "MERGED" && input.state !== "MERGED")) {
+        merged.state = previous.state
+        merged.stateObservedAt = previous.stateObservedAt
+      } else {
+        merged.state = input.state
+        merged.stateObservedAt = observedAt
+      }
+    }
+    if (!stale && input.observedAt !== undefined) {
+      if (input.source === "detail") merged.detailObservedAt = input.observedAt
+      else merged.listObservedAt = input.observedAt
+      merged.scalarObservedAt = input.observedAt
+    }
+    staged.set(id, merged)
+    touched.add(id)
+    ids.push(id)
+    if (!stale && input.labels !== undefined && input.labelsComplete !== false) {
+      const labels = input.labels
+      writeEdges.push(() => writeLabels(db, id, input.repositoryId, labels))
+    }
+    if (
+      !stale &&
+      input.reviewRequestsComplete !== false &&
+      (input.reviewRequestTargets !== undefined || input.reviewRequests !== undefined)
+    ) {
+      const targets = input.reviewRequestTargets ?? (input.reviewRequests ?? []).map(parseTarget)
+      // Resolve actors in input order, before a later author can enrich their identity.
+      const rows = await resolveReviewRequests(db, id, targets)
+      writeEdges.push(() =>
+        db.table<PullReviewRequest>("pullReviewRequests").replace(rows, (row) => row.pullId === id),
+      )
     }
   }
-  if (!stale && input.observedAt !== undefined) {
-    if (input.source === "detail") merged.detailObservedAt = input.observedAt
-    else merged.listObservedAt = input.observedAt
-    merged.scalarObservedAt = input.observedAt
-  }
-  await table.upsert([merged])
-  if (!stale && input.labels !== undefined && input.labelsComplete !== false) {
-    await writeLabels(db, id, input.repositoryId, input.labels)
-  }
-  if (
-    !stale &&
-    input.reviewRequestsComplete !== false &&
-    (input.reviewRequestTargets !== undefined || input.reviewRequests !== undefined)
-  ) {
-    const targets = input.reviewRequestTargets ?? (input.reviewRequests ?? []).map(parseTarget)
-    await writeReviewRequests(db, id, targets)
-  }
-  return id
+  await table.upsert([...touched].map((id) => staged.get(id)!))
+  for (const write of writeEdges) await write()
+  return ids
 }
 
 export function readPullSummary(
@@ -460,12 +496,11 @@ function parseTarget(login: string): NonNullable<PullRequest["reviewRequestTarge
   return login.includes("/") ? { kind: "team", login } : { kind: "user", login }
 }
 
-async function writeReviewRequests(
+async function resolveReviewRequests(
   db: NormalizedDatabase,
   pullId: string,
   targets: NonNullable<PullRequest["reviewRequestTargets"]>,
-): Promise<void> {
-  const relationTable = db.table<PullReviewRequest>("pullReviewRequests")
+): Promise<PullReviewRequest[]> {
   const teamTable = db.table<CanonicalTeam>("teams")
   const next: PullReviewRequest[] = []
   for (const [order, target] of targets.entries()) {
@@ -500,7 +535,7 @@ async function writeReviewRequests(
     const key = db.key("pull-review-request", pullId, target.kind, targetId)
     next.push({ key, scope: db.scope, pullId, targetKind: target.kind, targetId, order })
   }
-  await relationTable.replace(next, (row) => row.pullId === pullId)
+  return next
 }
 
 async function writeLabels(

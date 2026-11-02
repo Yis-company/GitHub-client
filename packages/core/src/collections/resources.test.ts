@@ -77,6 +77,132 @@ async function setup(persistence: ReturnType<ReturnType<typeof tempDatabase>["op
   return { db, pulls, resources, cache: new RepositoryCache(resources, true) }
 }
 
+test.each([1, 30])(
+  "a %i-pull resource page uses one scalar transaction and reopens in order",
+  async (size) => {
+    const statements: string[] = []
+    const file = tempDatabase()
+    files.push(file)
+    const first = await setup(file.open((sql) => statements.push(sql)))
+    // Initialize shared repository/author state before measuring fresh page rows.
+    const seed = first.cache.paginated(
+      pullRouteKey,
+      async () => ({ items: [pull()], hasMore: false }),
+      (item) => item.node_id,
+    )
+    await seed.load()
+    expect(seed.snapshot()?.persisted).toBe(true)
+    const table = file.tableName("normalized:pullRequests")
+    const key = { ...pullRouteKey, pageSize: size, query: "batch" }
+    const page = Array.from({ length: size }, (_, index) => ({
+      ...pull(`Pull ${index}`),
+      node_id: `PR_batch_${index}`,
+      number: index + 100,
+      labels: [],
+    }))
+    const resource = first.cache.paginated(
+      key,
+      async () => ({ items: page, hasMore: false }),
+      (item) => item.node_id,
+    )
+    statements.length = 0
+    await resource.load()
+    expect(resource.snapshot()?.persisted).toBe(true)
+    const measured = [...statements]
+    let scalarTransactions = 0
+    let scalarWrites = 0
+    let touchedPulls = false
+    for (const sql of measured) {
+      if (sql.startsWith(`INSERT INTO "${table}"`)) {
+        scalarWrites++
+        touchedPulls = true
+      }
+      if (sql === "COMMIT") {
+        if (touchedPulls) scalarTransactions++
+        touchedPulls = false
+      }
+    }
+    console.info(
+      "PULL_PAGE_SQL",
+      JSON.stringify({
+        size,
+        scalarTransactions,
+        scalarWrites,
+        statements: measured.length,
+        commits: measured.filter((sql) => sql === "COMMIT").length,
+      }),
+    )
+    expect.soft(scalarTransactions).toBe(1)
+    expect.soft(scalarWrites).toBe(size)
+
+    const reopened = await setup(file.open())
+    const offline = reopened.cache.paginated<ReturnType<typeof pull>>(
+      key,
+      async () => {
+        throw new Error("persisted page must reopen without a fetch")
+      },
+      (item) => item.node_id,
+    )
+    await offline.load()
+    expect(offline.snapshot()).toMatchObject({ loaded: true, persisted: true, data: { pages: 1 } })
+    expect(offline.snapshot()?.data?.items.map((item) => [item.node_id, item.title])).toEqual(
+      page.map((item) => [item.node_id, item.title]),
+    )
+  },
+)
+
+test("a pull-page failure after scalar persistence stays incomplete across reopen and recovers on retry", async () => {
+  const file = tempDatabase()
+  files.push(file)
+  const first = await setup(file.open())
+  const page = [pull(), { ...pull("Second pull"), node_id: "PR_second", number: 4 }]
+  const data = {
+    items: page,
+    pages: 1,
+    hasMore: false,
+    pageData: [{ items: page, hasMore: false }],
+  }
+  const row = {
+    key: repositoryResourceKey(pullRouteKey),
+    accountLogin: "alice",
+    kind: "pulls" as const,
+    identity: JSON.stringify(pullRouteKey),
+    data,
+    fetchedAt: Date.now(),
+    lastAccessedAt: Date.now(),
+    payloadBytes: JSON.stringify(data).length,
+  }
+  const items = first.db.table<ScopedRow>("repositoryResourceItems")
+  items.upsert = async () => {
+    expect(first.db.rows(first.pulls.canonical.pullRequests).map((item) => item.title)).toEqual([
+      "Initial title",
+      "Second pull",
+    ])
+    throw new Error("injected failure after scalar parents")
+  }
+  await expect(first.resources.upsert([row])).rejects.toThrow(
+    "injected failure after scalar parents",
+  )
+  expect(first.resources.collection.has(row.key)).toBe(false)
+
+  const reopened = await setup(file.open())
+  expect(
+    reopened.db.rows(
+      reopened.db.table<ScopedRow & { complete: boolean }>("repositoryResourceMemberships"),
+    ),
+  ).toMatchObject([{ complete: false }])
+  expect(reopened.resources.collection.has(row.key)).toBe(false)
+  const fetch = vi.fn(async () => ({ items: page, hasMore: false }))
+  const retry = reopened.cache.paginated(pullRouteKey, fetch, (item) => item.node_id)
+  await retry.load()
+  expect(fetch).toHaveBeenCalledOnce()
+  expect(retry.snapshot()).toMatchObject({
+    loaded: true,
+    persisted: true,
+    data: { items: [{ title: "Initial title" }, { title: "Second pull" }] },
+  })
+})
+
 test("shares canonical repositories and pulls across resource pages, reloads by ordered IDs, and notifies views", async () => {
   const file = tempDatabase()
   files.push(file)
