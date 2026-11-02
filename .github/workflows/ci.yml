@@ -41,7 +41,19 @@ jobs:
         env:
           TURBO_TOKEN: ${{ github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]' && secrets.TURBO_TOKEN || '' }}
       - run: bunx playwright install --with-deps chromium
-      - run: bun --cwd apps/desktop test:e2e
+      # Local receipts and diagnostic inspection: docs/verification.md
+      - id: e2e
+        run: bun --cwd apps/desktop test:e2e
+      - name: Retain browser failure diagnostics
+        if: ${{ failure() && steps.e2e.outcome == 'failure' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-failure-diagnostics
+          path: |
+            apps/desktop/test-results/
+            apps/desktop/playwright-report/
+          retention-days: 7
+          if-no-files-found: warn
 
   rust:
     runs-on: ubuntu-latest
@@ -50,7 +62,7 @@ jobs:
       - name: Install Tauri system libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev dbus gnome-keyring libglib2.0-bin
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -65,3 +77,5 @@ jobs:
       - name: Native regression tests
         working-directory: apps/desktop/src-tauri
         run: cargo test --lib
+      - name: Credential backend compatibility
+        run: bash scripts/check-credential-compat.sh
