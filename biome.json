@@ -12,6 +12,7 @@
       "!**/src-tauri/target",
       "!.claude",
       "!.codex/plans",
+      "!.codex/retros",
       "!**/routeTree.gen.ts"
     ]
   },
