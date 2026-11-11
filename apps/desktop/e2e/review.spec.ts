@@ -37,8 +37,10 @@ test("a failed PR refresh shows one toast and preserves loaded content", async (
 
   // Once dismissed, an identical background failure must not reopen the toast.
   await expect(errorToast).toHaveCount(0)
+  // Count only this refresh: earlier tab switches may also sync files and are not under test.
+  failedRequests = 0
   await page.getByRole("button", { name: "Refresh", exact: true }).click()
-  await expect.poll(() => failedRequests).toBe(2)
+  await expect.poll(() => failedRequests).toBeGreaterThan(0)
   await expect(
     page.getByRole("button", { name: "Refresh", exact: true }).locator("svg"),
   ).not.toHaveClass(/animate-spin/)
