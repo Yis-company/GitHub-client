@@ -41,6 +41,7 @@
       "debugApplicationIdSuffix": ".debug"
     },
     "macOS": {
+      "minimumSystemVersion": "13.3",
       "signingIdentity": "-"
     },
     "createUpdaterArtifacts": true
