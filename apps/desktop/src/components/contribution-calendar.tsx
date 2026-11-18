@@ -10,7 +10,7 @@ import {
   PopoverTitle,
   PopoverTrigger,
 } from "@github-client/ui/components/popover"
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react"
+import { useCallback, useEffect, useId, useMemo, useState, useSyncExternalStore } from "react"
 import { useSession } from "@/app/client"
 
 const dayName = new Intl.DateTimeFormat(undefined, { weekday: "short", timeZone: "UTC" })
@@ -49,41 +49,32 @@ function total(calendar: ContributionCalendarData) {
 
 function Cell({
   day,
-  index,
-  activeIndex,
+  active,
   onFocus,
   onPointerEnter,
   onKeyDown,
   id,
 }: {
-  day?: ContributionDay
+  day: ContributionDay
   id: string
-  index: number
-  activeIndex: number
-  onFocus: (index: number) => void
+  active: boolean
+  onFocus: () => void
   onPointerEnter: () => void
-  onKeyDown: (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => void
+  onKeyDown: (event: React.KeyboardEvent<HTMLButtonElement>) => void
 }) {
-  const title = day
-    ? `${dateName.format(dateAtUtcNoon(day.date))}: ${day.contributionCount} ${day.contributionCount === 1 ? "contribution" : "contributions"}`
-    : "No data"
+  const title = `${dateName.format(dateAtUtcNoon(day.date))}: ${day.contributionCount} ${day.contributionCount === 1 ? "contribution" : "contributions"}`
   return (
     <button
       type="button"
       aria-label={title}
       id={id}
       title={title}
-      tabIndex={day && index === activeIndex ? 0 : -1}
-      onFocus={() => day && onFocus(index)}
-      onPointerEnter={() => day && onPointerEnter()}
-      onKeyDown={(event) => day && onKeyDown(event, index)}
+      tabIndex={active ? 0 : -1}
+      onFocus={onFocus}
+      onPointerEnter={onPointerEnter}
+      onKeyDown={onKeyDown}
       className="block h-[10px] w-[10px] rounded-[2px] border border-foreground/10 p-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
-      style={{
-        backgroundColor: day
-          ? (levelColors[day.contributionLevel] ?? "var(--muted)")
-          : "transparent",
-      }}
-      aria-disabled={!day}
+      style={{ backgroundColor: levelColors[day.contributionLevel] ?? "var(--muted)" }}
     />
   )
 }
@@ -97,35 +88,46 @@ function Heatmap({
 }) {
   const weeks = full ? calendar.weeks : recentWeeks(calendar)
   const days = useMemo(() => weeks.flatMap((week) => week.contributionDays), [weeks])
+  const gridId = useId()
   const [activeDate, setActiveDate] = useState<string>()
   const [focusedDate, setFocusedDate] = useState<string>()
-  const foundActiveIndex = activeDate ? days.findIndex((day) => day.date === activeDate) : 0
-  const activeIndex = Math.max(
-    0,
-    Math.min(days.length - 1, foundActiveIndex < 0 ? days.length - 1 : foundActiveIndex),
-  )
+  const activeDay = activeDate
+    ? (days.find((day) => day.date === activeDate) ?? days[days.length - 1])
+    : days[0]
   const focusedDay = days.find((day) => day.date === focusedDate)
-  const handleKeyDown = useCallback(
-    (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
-      const delta =
-        event.key === "ArrowLeft"
-          ? -7
-          : event.key === "ArrowRight"
-            ? 7
-            : event.key === "ArrowUp"
-              ? -1
-              : event.key === "ArrowDown"
-                ? 1
-                : 0
-      if (!delta) return
-      event.preventDefault()
-      const next = Math.max(0, Math.min(days.length - 1, index + delta))
-      const nextDay = days[next]
-      if (nextDay) setActiveDate(nextDay.date)
-      document.getElementById(`contribution-day-${full ? "full" : "recent"}-${next}`)?.focus()
-    },
-    [days, full],
-  )
+  const cellId = (week: number, weekday: number) => `${gridId}-${week}-${weekday}`
+  const handleKeyDown = (
+    event: React.KeyboardEvent<HTMLButtonElement>,
+    week: number,
+    weekday: number,
+  ) => {
+    if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey)
+      return
+
+    let nextWeek = week
+    let nextWeekday = weekday
+    switch (event.key) {
+      case "ArrowLeft":
+        nextWeek--
+        break
+      case "ArrowRight":
+        nextWeek++
+        break
+      case "ArrowUp":
+        nextWeekday--
+        break
+      case "ArrowDown":
+        nextWeekday++
+        break
+      default:
+        return
+    }
+
+    const nextCell = event.currentTarget.ownerDocument.getElementById(cellId(nextWeek, nextWeekday))
+    if (!nextCell) return
+    event.preventDefault()
+    nextCell.focus()
+  }
   const dayByWeekday = new Map<number, string>()
   for (const day of days) dayByWeekday.set(day.weekday, dayName.format(dateAtUtcNoon(day.date)))
 
@@ -154,29 +156,25 @@ function Heatmap({
             </div>
           ))}
           {weeks.map((week, weekIndex) =>
-            week.contributionDays.map((day) => {
-              const index = days.indexOf(day)
-              return (
-                <div
-                  key={day.date}
-                  className="flex items-start"
-                  style={{ gridColumn: weekIndex + 2, gridRow: day.weekday + 1 }}
-                >
-                  <Cell
-                    day={day}
-                    id={`contribution-day-${full ? "full" : "recent"}-${index}`}
-                    index={index}
-                    activeIndex={activeIndex}
-                    onFocus={(i) => {
-                      setActiveDate(days[i]?.date)
-                      setFocusedDate(day.date)
-                    }}
-                    onPointerEnter={() => setFocusedDate(day.date)}
-                    onKeyDown={handleKeyDown}
-                  />
-                </div>
-              )
-            }),
+            week.contributionDays.map((day) => (
+              <div
+                key={day.date}
+                className="flex items-start"
+                style={{ gridColumn: weekIndex + 2, gridRow: day.weekday + 1 }}
+              >
+                <Cell
+                  day={day}
+                  id={cellId(weekIndex, day.weekday)}
+                  active={day === activeDay}
+                  onFocus={() => {
+                    setActiveDate(day.date)
+                    setFocusedDate(day.date)
+                  }}
+                  onPointerEnter={() => setFocusedDate(day.date)}
+                  onKeyDown={(event) => handleKeyDown(event, weekIndex, day.weekday)}
+                />
+              </div>
+            )),
           )}
         </div>
       </fieldset>

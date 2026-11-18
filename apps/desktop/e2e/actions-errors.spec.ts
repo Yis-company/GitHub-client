@@ -34,14 +34,14 @@ const job = (status: string) => ({
 const json = (route: import("@playwright/test").Route, body: unknown, status = 200) =>
   route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) })
 
-async function openActions(page: import("@playwright/test").Page) {
+async function openActions(page: import("@playwright/test").Page, runs = [run]) {
   await fakeGitHub(page)
   let resolveWorkflows!: () => void
   const workflowsLoaded = new Promise<void>((resolve) => {
     resolveWorkflows = resolve
   })
   await page.route("https://api.github.com/repos/acme/api/actions/runs**", (route) =>
-    json(route, { total_count: 1, workflow_runs: [run] }),
+    json(route, { total_count: runs.length, workflow_runs: runs }),
   )
   await page.route("https://api.github.com/repos/acme/api/actions/workflows**", async (route) => {
     await json(route, {
@@ -57,6 +57,42 @@ async function openActions(page: import("@playwright/test").Page) {
   await page.goto("/#/actions/acme/api")
   await workflowsLoaded
 }
+
+test("Enter activates the focused Actions control and run navigation keeps row focus", async ({
+  page,
+}) => {
+  await openActions(page, [
+    run,
+    { ...run, id: 902, display_title: "Check deployment", created_at: "2026-09-24T10:00:00Z" },
+  ])
+  const firstRun = page.getByRole("button", { name: /Fix deployment/ })
+  const secondRun = page.getByRole("button", { name: /Check deployment/ })
+  const runWorkflow = page
+    .getByRole("main")
+    .getByRole("button", { name: "Run workflow", exact: true })
+  await expect(page.getByText("Fix deployment", { exact: true })).toBeVisible()
+
+  const filter = page.getByPlaceholder("Filter  /")
+  await filter.press("Enter")
+  await filter.dispatchEvent("keydown", { key: "Escape", isComposing: true })
+  await expect(filter).toBeFocused()
+
+  await runWorkflow.press("Enter")
+  await expect(page.getByRole("dialog", { name: "Run workflow" })).toBeVisible()
+  await page.keyboard.press("Escape")
+  await expect(runWorkflow).toBeFocused()
+
+  await page.getByRole("button", { name: "Open on GitHub", exact: true }).press("Tab")
+  await expect(firstRun).toBeFocused()
+  await page.keyboard.press("ArrowDown")
+  await expect(secondRun).toBeFocused()
+  await page.keyboard.press("k")
+  await expect(firstRun).toBeFocused()
+  await page.keyboard.press("Enter")
+  await expect(page.getByRole("dialog", { name: "Workflow run 900" })).toBeVisible()
+  await page.keyboard.press("Escape")
+  await expect(firstRun).toBeFocused()
+})
 
 test("Actions refresh failure reports an error and keeps loaded runs", async ({ page }) => {
   let fail = false

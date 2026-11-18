@@ -13,6 +13,11 @@ export function isEditableTarget(target: EventTarget | null): boolean {
   )
 }
 
+export function isComposingKey(event: KeyboardEvent): boolean {
+  // Older WebKit can report compositionend before the confirming keydown.
+  return event.isComposing || event.keyCode === 229
+}
+
 function keyName(event: KeyboardEvent): string {
   const parts: string[] = []
   if (event.metaKey || event.ctrlKey) parts.push("mod")

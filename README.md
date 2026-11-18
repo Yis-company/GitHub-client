@@ -69,7 +69,7 @@ Versions are managed with [Changesets](https://changesets.dev). See `.changeset/
 3. Merging that pull request tags `@github-client/desktop@<version>`, creates the GitHub release, and attaches installers built on GitHub Actions:
    - Linux: `.deb`, `.rpm`, `.AppImage`
    - Windows: `.msi` and `-setup.exe`
-   - macOS: universal `.dmg` (Apple Silicon and Intel)
+   - macOS: universal `.dmg` (Apple Silicon and Intel), macOS 13.3 bundle minimum
 
 The workflow needs **Settings → Actions → General → Allow GitHub Actions to create and approve pull requests** turned on.
 

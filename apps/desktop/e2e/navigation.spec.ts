@@ -225,11 +225,22 @@ test("calendar remains in the tab order after a shorter refreshed range", async 
   options.lastContributionDays = 1
   await page.clock.setFixedTime(new Date(Date.now() + 60 * 60 * 1000 + 1000))
   await page.evaluate(() => window.dispatchEvent(new Event("focus")))
-  await expect(recent.getByRole("button")).toHaveCount(85)
+  const days = recent.getByRole("button")
+  await expect(days).toHaveCount(85)
   await expect(recent.locator('button[tabindex="0"]')).toHaveCount(1)
   await recent.locator('button[tabindex="0"]').focus()
   await page.keyboard.press("ArrowUp")
-  await expect(recent.locator('button[tabindex="0"]')).toBeFocused()
+  await expect(days.last()).toBeFocused()
+
+  await page.keyboard.press("ArrowLeft")
+  await expect(days.nth(-8)).toBeFocused()
+  await page.keyboard.press("ArrowDown")
+  await page.keyboard.press("ArrowRight")
+  await expect(days.nth(-7)).toBeFocused()
+
+  await days.nth(-2).focus()
+  await page.keyboard.press("ArrowDown")
+  await expect(days.nth(-2)).toBeFocused()
 })
 
 test("Actions run retains its repository context and confirmation boundary", async ({

@@ -26,7 +26,7 @@ import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 import { useClient } from "@/app/client"
 import { showError, useErrorToast } from "@/app/errors"
-import { useShortcuts } from "@/app/shortcuts"
+import { isComposingKey, useShortcuts } from "@/app/shortcuts"
 
 const ROW_HEIGHT = 20
 const RUNNING_POLL_MS = 10_000
@@ -194,6 +194,7 @@ function LogLines({ raw }: { raw: string }) {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
+            if (isComposingKey(e.nativeEvent)) return
             if (e.key === "Enter") {
               e.preventDefault()
               step(e.shiftKey ? -1 : 1)

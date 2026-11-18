@@ -59,7 +59,7 @@ export function useInboxModel({
     ["FAILURE", "ERROR"].includes(pull.checkState ?? ""),
   )
   const sortRank = (list: InboxPull[], key: "activeOrder" | "pinOrder") =>
-    [...list].sort((a, b) => {
+    list.sort((a, b) => {
       const aRank = a.preference?.[key] ?? Number.MAX_SAFE_INTEGER
       const bRank = b.preference?.[key] ?? Number.MAX_SAFE_INTEGER
       return (

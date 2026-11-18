@@ -22,7 +22,7 @@ import { useVirtualizer } from "@tanstack/react-virtual"
 import { CheckIcon } from "lucide-react"
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react"
 import { useClient } from "@/app/client"
-import { useShortcuts } from "@/app/shortcuts"
+import { isComposingKey, useShortcuts } from "@/app/shortcuts"
 import {
   CommentEditor,
   DraftCard,
@@ -386,7 +386,7 @@ function FilesView({ detail, files }: { detail: PullRequestDetail; files: PullRe
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Escape" || e.key === "Enter") {
+              if (e.key === "Escape" && !isComposingKey(e.nativeEvent)) {
                 e.preventDefault()
                 e.currentTarget.blur()
               }

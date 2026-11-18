@@ -13,10 +13,10 @@ import { cn } from "@github-client/ui/lib/utils"
 import { eq } from "@tanstack/db"
 import { useLiveQuery } from "@tanstack/react-db"
 import { ExternalLinkIcon, PlayIcon, RefreshCwIcon } from "lucide-react"
-import { useEffect, useMemo, useRef, useState } from "react"
+import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react"
 import { useClient, useJobStatus, useWatch } from "@/app/client"
 import { useErrorToast } from "@/app/errors"
-import { useShortcuts } from "@/app/shortcuts"
+import { isComposingKey, useShortcuts } from "@/app/shortcuts"
 import { RepositoryContext } from "@/components/repository-context"
 import { type RunState, runState, StateIcon } from "@/components/status"
 import { duration, RelativeTime } from "@/components/time"
@@ -56,6 +56,7 @@ export function RunsContent({
   const [selected, setSelected] = useState(0)
   const [dispatching, setDispatching] = useState(false)
   const searchRef = useRef<HTMLInputElement>(null)
+  const listRef = useRef<HTMLUListElement>(null)
 
   useWatch((c) => (active ? c.watchRuns(repo) : () => {}), [repo, active])
   useWatch((c) => (active ? c.watchWorkflows(repo) : () => {}), [repo, active])
@@ -100,32 +101,60 @@ export function RunsContent({
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset the selection when the filters change
   useEffect(() => setSelected(0), [repo, workflow, status, text])
-  useEffect(() => {
-    document.querySelector(`[data-row="${selected}"]`)?.scrollIntoView({ block: "nearest" })
-  }, [selected])
+  const selectedIndex = Math.min(selected, visible.length - 1)
+  const shortcutsEnabled = active && !dispatching && !location.run
 
-  const open = (run: WorkflowRun | undefined) => {
-    if (!run) return
+  const open = (run: WorkflowRun) => {
     location.update({ run: run.id, job: undefined })
   }
   const refresh = () =>
     Promise.all([client.refresh(jobKeys.runs(repo)), client.refresh(jobKeys.workflows(repo))])
 
+  const handleRunKeyDown = (
+    event: KeyboardEvent<HTMLButtonElement>,
+    index: number,
+    run: WorkflowRun,
+  ) => {
+    if (
+      !shortcutsEnabled ||
+      event.defaultPrevented ||
+      event.altKey ||
+      event.ctrlKey ||
+      event.metaKey ||
+      isComposingKey(event.nativeEvent)
+    )
+      return
+
+    switch (event.key.toLowerCase()) {
+      case "j":
+      case "arrowdown":
+        event.preventDefault()
+        listRef.current?.children
+          .item(index + 1)
+          ?.querySelector("button")
+          ?.focus()
+        break
+      case "k":
+      case "arrowup":
+        event.preventDefault()
+        listRef.current?.children
+          .item(index - 1)
+          ?.querySelector("button")
+          ?.focus()
+        break
+      case "o":
+        event.preventDefault()
+        void openExternal(run.url)
+        break
+    }
+  }
+
   useShortcuts(
     {
-      j: () => setSelected((i) => Math.min(i + 1, visible.length - 1)),
-      k: () => setSelected((i) => Math.max(i - 1, 0)),
-      // biome-ignore lint/correctness/noComponentHookFactories: key names follow KeyboardEvent.key
-      ArrowDown: () => setSelected((i) => Math.min(i + 1, visible.length - 1)),
-      // biome-ignore lint/correctness/noComponentHookFactories: key names follow KeyboardEvent.key
-      ArrowUp: () => setSelected((i) => Math.max(i - 1, 0)),
-      // biome-ignore lint/correctness/noComponentHookFactories: key names follow KeyboardEvent.key
-      Enter: () => open(visible[selected]),
-      o: () => visible[selected] && void openExternal(visible[selected].url),
       "/": () => searchRef.current?.focus(),
       r: () => void refresh(),
     },
-    active && !dispatching && !location.run,
+    shortcutsEnabled,
   )
 
   const workflowName = (id: string) =>
@@ -175,7 +204,7 @@ export function RunsContent({
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Escape" || e.key === "Enter") e.currentTarget.blur()
+            if (e.key === "Escape" && !isComposingKey(e.nativeEvent)) e.currentTarget.blur()
           }}
         />
         <Button size="sm" variant="outline" onClick={() => setDispatching(true)}>
@@ -193,15 +222,15 @@ export function RunsContent({
           <ExternalLinkIcon />
         </Button>
       </header>
-      <ul className="flex-1 overflow-y-auto">
+      <ul ref={listRef} className="flex-1 overflow-y-auto">
         {visible.map((run, index) => (
           <RunRow
             key={run.id}
             run={run}
-            index={index}
-            selected={index === selected}
+            selected={index === selectedIndex}
             onSelect={() => setSelected(index)}
             onOpen={() => open(run)}
+            onKeyDown={(event) => handleRunKeyDown(event, index, run)}
           />
         ))}
         {visible.length === 0 && (
@@ -227,54 +256,60 @@ export function RunsContent({
 
 function RunRow({
   run,
-  index,
   selected,
   onSelect,
   onOpen,
+  onKeyDown,
 }: {
   run: WorkflowRun
-  index: number
   selected: boolean
   onSelect: () => void
   onOpen: () => void
+  onKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => void
 }) {
   const completed = run.status === "completed"
   return (
-    // biome-ignore lint/a11y/useKeyWithClickEvents: rows are keyboard driven through j/k and Enter
-    <li
-      data-row={index}
-      className={cn(
-        "flex cursor-default items-center gap-3 border-b px-4 py-2 text-sm",
-        selected ? "bg-accent" : "hover:bg-accent/50",
-      )}
-      onMouseMove={onSelect}
-      onClick={onOpen}
-    >
-      <StateIcon state={runState(run.status, run.conclusion)} />
-      <div className="min-w-0 flex-1">
-        <div className="truncate font-medium">{run.displayTitle}</div>
-        <div className="flex items-center gap-1.5 truncate text-xs text-muted-foreground">
-          <span className="text-foreground/80">{run.name}</span>
-          <span>
-            #{run.runNumber}
-            {run.runAttempt > 1 && ` (attempt ${run.runAttempt})`}
+    <li>
+      <button
+        type="button"
+        tabIndex={selected ? 0 : -1}
+        className={cn(
+          "flex w-full cursor-default items-center gap-3 border-b px-4 py-2 text-left text-sm focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
+          selected ? "bg-accent" : "hover:bg-accent/50",
+        )}
+        onFocus={onSelect}
+        onClick={() => {
+          onSelect()
+          onOpen()
+        }}
+        onKeyDown={onKeyDown}
+      >
+        <StateIcon state={runState(run.status, run.conclusion)} />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate font-medium">{run.displayTitle}</span>
+          <span className="flex items-center gap-1.5 truncate text-xs text-muted-foreground">
+            <span className="text-foreground/80">{run.name}</span>
+            <span>
+              #{run.runNumber}
+              {run.runAttempt > 1 && ` (attempt ${run.runAttempt})`}
+            </span>
+            <span>·</span>
+            <span>{run.event}</span>
+            {run.actor && <span>by {run.actor}</span>}
           </span>
-          <span>·</span>
-          <span>{run.event}</span>
-          {run.actor && <span>by {run.actor}</span>}
-        </div>
-      </div>
-      {run.headBranch && (
-        <code className="max-w-48 truncate rounded bg-muted px-1.5 py-0.5 text-xs">
-          {run.headBranch}
-        </code>
-      )}
-      <span className="w-16 text-right text-xs tabular-nums text-muted-foreground">
-        {duration(run.createdAt, completed ? run.updatedAt : null)}
-      </span>
-      <span className="w-16 text-right text-xs text-muted-foreground">
-        <RelativeTime iso={run.createdAt} />
-      </span>
+        </span>
+        {run.headBranch && (
+          <code className="max-w-48 truncate rounded bg-muted px-1.5 py-0.5 text-xs">
+            {run.headBranch}
+          </code>
+        )}
+        <span className="w-16 text-right text-xs tabular-nums text-muted-foreground">
+          {duration(run.createdAt, completed ? run.updatedAt : null)}
+        </span>
+        <span className="w-16 text-right text-xs text-muted-foreground">
+          <RelativeTime iso={run.createdAt} />
+        </span>
+      </button>
     </li>
   )
 }
